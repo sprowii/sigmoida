@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # filename: wizard_bot.py
-import os, asyncio, logging, time, io
+import os, asyncio, logging, time, io, re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder, ContextTypes,
     CommandHandler, MessageHandler, filters, CallbackContext
@@ -60,6 +61,16 @@ history: Dict[int, List[Dict[str, str]]] = {}
 
 
 # ---------- Вспомогалки ----------
+def sanitize_telegram_markdown(text: str) -> str:
+    """Очищает Markdown от неподдерживаемых Telegram элементов."""
+    # Заменяем жирный текст с двойными ** на одинарные *
+    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
+    # Удаляем заголовки (#, ##, ...)
+    text = re.sub(r'^\s*#+\s+', '', text, flags=re.MULTILINE)
+    # Удаляем горизонтальные линии (---, ***, ___), т.к. они не поддерживаются
+    text = re.sub(r'^\s*[-*=_]{3,}\s*$', '', text, flags=re.MULTILINE)
+    return text
+
 def get_cfg(chat_id: int) -> ChatConfig:
     if chat_id not in configs:
         configs[chat_id] = ChatConfig()
@@ -167,6 +178,23 @@ def answer_size_prompt(size: str) -> str:
     }
     return mapping.get(size, "")
 
+def split_long_message(text: str, max_length: int = 4096) -> List[str]:
+    """Разбивает длинное сообщение на части по max_length символов."""
+    if len(text) <= max_length:
+        return [text]
+    parts = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 <= max_length:
+            current += (line + "\n" if current else line)
+        else:
+            if current:
+                parts.append(current.strip())
+            current = line
+    if current:
+        parts.append(current.strip())
+    return parts
+
 # ---------- Команды ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -247,6 +275,8 @@ async def set_msgsize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- Основной обработчик текста ----------
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
     chat_id = update.effective_chat.id
     text = update.message.text
 
@@ -269,19 +299,30 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception(e)
         full_reply = "⚠️ Ошибка модели."
 
-    try:
-        await update.message.reply_text(
-            full_reply, disable_web_page_preview=True, parse_mode="Markdown"
-        )
-    except telegram.error.BadRequest as e:
-        if "entities" in str(e):
-            log.warning("Markdown parse failed, sending plain text. Error: %s", e)
-            await update.message.reply_text(full_reply, disable_web_page_preview=True)
-        else:
-            log.error("Failed to send message: %s", e)
+    # Очищаем и разбиваем длинные сообщения
+    sanitized_reply = sanitize_telegram_markdown(full_reply)
+    message_parts = split_long_message(sanitized_reply)
+    for i, part in enumerate(message_parts):
+        try:
+            await update.message.reply_text(
+                part, disable_web_page_preview=True, parse_mode="Markdown"
+            )
+        except BadRequest as e:
+            if "entities" in str(e).lower() or "parse" in str(e).lower():
+                log.warning("Markdown parse failed, sending plain text. Error: %s", e)
+                await update.message.reply_text(part, disable_web_page_preview=True)
+            elif "too long" in str(e).lower():
+                # Если даже без Markdown слишком длинное, разбиваем ещё больше
+                plain_parts = split_long_message(part, max_length=4000)
+                for plain_part in plain_parts:
+                    await update.message.reply_text(plain_part, disable_web_page_preview=True)
+            else:
+                log.error("Failed to send message: %s", e)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     chat_id = update.effective_chat.id
     text = update.message.caption or "Опиши это изображение"
     
@@ -291,6 +332,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Получаем фото - берем самое большое
     photos = update.message.photo
+    if not photos:
+        return
     photo = photos[-1]
     
     await context.bot.send_chat_action(chat_id, "typing")
@@ -316,16 +359,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception(e)
         full_reply = "⚠️ Ошибка модели."
     
-    try:
-        await update.message.reply_text(
-            full_reply, disable_web_page_preview=True, parse_mode="Markdown"
-        )
-    except telegram.error.BadRequest as e:
-        if "entities" in str(e):
-            log.warning("Markdown parse failed, sending plain text. Error: %s", e)
-            await update.message.reply_text(full_reply, disable_web_page_preview=True)
-        else:
-            log.error("Failed to send message: %s", e)
+    # Очищаем и разбиваем длинные сообщения
+    sanitized_reply = sanitize_telegram_markdown(full_reply)
+    message_parts = split_long_message(sanitized_reply)
+    for i, part in enumerate(message_parts):
+        try:
+            await update.message.reply_text(
+                part, disable_web_page_preview=True, parse_mode="Markdown"
+            )
+        except BadRequest as e:
+            if "entities" in str(e).lower() or "parse" in str(e).lower():
+                log.warning("Markdown parse failed, sending plain text. Error: %s", e)
+                await update.message.reply_text(part, disable_web_page_preview=True)
+            elif "too long" in str(e).lower():
+                plain_parts = split_long_message(part, max_length=4000)
+                for plain_part in plain_parts:
+                    await update.message.reply_text(plain_part, disable_web_page_preview=True)
+            else:
+                log.error("Failed to send message: %s", e)
 
 # ---------- JOB для проверки моделей ----------
 async def check_models_job(context: CallbackContext):
@@ -358,14 +409,21 @@ async def autopost_job(context: CallbackContext):
             model_display = model_used.replace("gemini-", "").replace("-", " ").title()
             
             message_text = f"📰 Автодайджест ({model_display}):\n{summary}"
-            try:
-                await context.bot.send_message(chat_id, message_text, parse_mode="Markdown")
-            except telegram.error.BadRequest as e:
-                if "entities" in str(e):
-                    log.warning("Markdown parse failed for autopost, sending plain text. Error: %s", e)
-                    await context.bot.send_message(chat_id, message_text)
-                else:
-                    log.error("Failed to send autopost message: %s", e)
+            sanitized_text = sanitize_telegram_markdown(message_text)
+            message_parts = split_long_message(sanitized_text)
+            for part in message_parts:
+                try:
+                    await context.bot.send_message(chat_id, part, parse_mode="Markdown")
+                except BadRequest as e:
+                    if "entities" in str(e).lower() or "parse" in str(e).lower():
+                        log.warning("Markdown parse failed for autopost, sending plain text. Error: %s", e)
+                        await context.bot.send_message(chat_id, part)
+                    elif "too long" in str(e).lower():
+                        plain_parts = split_long_message(part, max_length=4000)
+                        for plain_part in plain_parts:
+                            await context.bot.send_message(chat_id, plain_part)
+                    else:
+                        log.error("Failed to send autopost message: %s", e)
 
         except Exception as e:
             log.error(f"Autopost failed for chat {chat_id}: {e}")
