@@ -47,7 +47,7 @@ log = logging.getLogger("wizardbot")
 @dataclass
 class ChatConfig:
     autopost_enabled: bool = False
-    interval: int = 7200          # 2 ч
+    interval: int = 14400          # 4 ч
     min_messages: int = 10
     msg_size: str = "medium"      # small/medium/large
     last_post_ts: float = 0.0
@@ -232,16 +232,25 @@ def answer_size_prompt(size: str) -> str:
 
 # ---------- Команды ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Я Gemini 2.5 бот. /help – справка")
+    await update.message.reply_text(
+        "👋 Я Gemini 2.5 бот. /help – справка\n\n"
+        "⚠️ <b>Важно:</b> Ваши сообщения и изображения обрабатываются через Google Gemini API. "
+        "Используя бота, вы соглашаетесь с передачей данных в Google для обработки.",
+        parse_mode="HTML"
+    )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
+        "<b>Команды:</b>\n"
         "/settings – показать текущие настройки\n"
         "/autopost on|off – включить/выключить автопосты\n"
         "/set_interval <сек> – интервал автопоста\n"
         "/set_minmsgs <n> – минимум новых сообщений перед автопостом\n"
         "/set_msgsize <small|medium|large> – размер ответов бота\n"
-        "/reset – очистить историю диалога"
+        "/reset – очистить историю диалога\n\n"
+        "⚠️ <b>Конфиденциальность:</b> Ваши сообщения и изображения передаются в Google Gemini API для обработки. "
+        "История диалога хранится только в памяти и не сохраняется на сервере.",
+        parse_mode="HTML"
     )
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
