@@ -433,42 +433,16 @@ async def main():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, check_available_models)
     
-    # Используем asyncio задачи для периодических задач (работает без job_queue)
-    async def periodic_tasks():
-        """Периодические задачи через asyncio"""
-        # Ждём 14400 секунд (4 часа) перед первой проверкой моделей
-        await asyncio.sleep(14400)
-        while True:
-            try:
-                # Создаём фиктивный контекст с bot
-                class FakeContext:
-                    bot = app.bot
-                await check_models_job(FakeContext())
-            except Exception as e:
-                log.exception(f"Error in check_models_job: {e}")
-            await asyncio.sleep(14400)  # каждые 4 часа
-    
-    async def autopost_tasks():
-        """Автопосты каждые 60 секунд"""
-        await asyncio.sleep(60)  # первая проверка через минуту
-        while True:
-            try:
-                # Создаём фиктивный контекст с bot
-                class FakeContext:
-                    bot = app.bot
-                await autopost_job(FakeContext())
-            except Exception as e:
-                log.exception(f"Error in autopost_job: {e}")
-            await asyncio.sleep(60)  # каждые 60 секунд
-    
+    # Используем job_queue для периодических задач (если доступен)
+    if app.job_queue:
+        app.job_queue.run_repeating(check_models_job, interval=14400, first=14400)
+        app.job_queue.run_repeating(autopost_job, interval=60, first=60)
+        log.info("JobQueue initialized")
+    else:
+        log.warning("JobQueue not available - scheduled jobs disabled")
+
     log.info("Bot started 🚀")
-    
-    # Запускаем polling и фоновые задачи параллельно
-    await asyncio.gather(
-        app.run_polling(allowed_updates=Update.ALL_TYPES),
-        periodic_tasks(),
-        autopost_tasks()
-    )
+    await app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     asyncio.run(main())
