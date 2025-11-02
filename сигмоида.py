@@ -244,9 +244,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Команды:</b>\n"
         "/settings – показать текущие настройки\n"
         "/autopost on|off – включить/выключить автопосты\n"
-        "/set_interval <сек> – интервал автопоста\n"
-        "/set_minmsgs <n> – минимум новых сообщений перед автопостом\n"
-        "/set_msgsize <small|medium|large> – размер ответов бота\n"
+        "/set_interval &lt;сек&gt; – интервал автопоста\n"
+        "/set_minmsgs &lt;n&gt; – минимум новых сообщений перед автопостом\n"
+        "/set_msgsize &lt;small|medium|large&gt; – размер ответов бота\n"
         "/reset – очистить историю диалога\n\n"
         "⚠️ <b>Конфиденциальность:</b> Ваши сообщения и изображения передаются в Google Gemini API для обработки. "
         "История диалога хранится только в памяти и не сохраняется на сервере.",
