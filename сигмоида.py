@@ -11,6 +11,15 @@ from telegram.ext import (
     CommandHandler, MessageHandler, filters, CallbackContext
 )
 import google.generativeai as genai
+from flask import Flask # <-- Добавляем импорт Flask
+import threading # <-- Добавляем импорт threading
+
+# Создаем простое Flask-приложение для веб-сервера
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "Bot is running!", 200
 
 # Gemini API конфиг
 API_KEYS = []
@@ -462,7 +471,18 @@ def main():
         log.warning("JobQueue not available - scheduled jobs disabled")
 
     log.info("Bot started 🚀")
+
+    # --- Запускаем Flask-сервер в отдельном потоке ---
+    # Render передает порт через переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    flask_thread = threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=port, use_reloader=False))
+    flask_thread.daemon = True # Поток завершится, когда завершится основной процесс
+    flask_thread.start()
+    log.info(f"Flask app started on port {port}")
+    # ---------------------------------------------------
+
     app.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=None)
+
 
 if __name__ == "__main__":
     main()
