@@ -268,7 +268,18 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.exception(e)
         full_reply = "⚠️ Ошибка модели."
-    await update.message.reply_text(full_reply, disable_web_page_preview=True)
+
+    try:
+        await update.message.reply_text(
+            full_reply, disable_web_page_preview=True, parse_mode="Markdown"
+        )
+    except telegram.error.BadRequest as e:
+        if "entities" in str(e):
+            log.warning("Markdown parse failed, sending plain text. Error: %s", e)
+            await update.message.reply_text(full_reply, disable_web_page_preview=True)
+        else:
+            log.error("Failed to send message: %s", e)
+
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -304,7 +315,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.exception(e)
         full_reply = "⚠️ Ошибка модели."
-    await update.message.reply_text(full_reply, disable_web_page_preview=True)
+    
+    try:
+        await update.message.reply_text(
+            full_reply, disable_web_page_preview=True, parse_mode="Markdown"
+        )
+    except telegram.error.BadRequest as e:
+        if "entities" in str(e):
+            log.warning("Markdown parse failed, sending plain text. Error: %s", e)
+            await update.message.reply_text(full_reply, disable_web_page_preview=True)
+        else:
+            log.error("Failed to send message: %s", e)
 
 # ---------- JOB для проверки моделей ----------
 async def check_models_job(context: CallbackContext):
@@ -335,11 +356,19 @@ async def autopost_job(context: CallbackContext):
             loop = asyncio.get_event_loop()
             summary, model_used = await loop.run_in_executor(None, llm_request, chat_id, prompt)
             model_display = model_used.replace("gemini-", "").replace("-", " ").title()
-            await context.bot.send_message(chat_id, f"📰 Автодайджест ({model_display}):\n{summary}")
-            cfg.last_post_ts = time.time()
-            cfg.new_msg_counter = 0
+            
+            message_text = f"📰 Автодайджест ({model_display}):\n{summary}"
+            try:
+                await context.bot.send_message(chat_id, message_text, parse_mode="Markdown")
+            except telegram.error.BadRequest as e:
+                if "entities" in str(e):
+                    log.warning("Markdown parse failed for autopost, sending plain text. Error: %s", e)
+                    await context.bot.send_message(chat_id, message_text)
+                else:
+                    log.error("Failed to send autopost message: %s", e)
+
         except Exception as e:
-            log.exception(e)
+            log.error(f"Autopost failed for chat {chat_id}: {e}")
 
 # ---------- MAIN ----------
 def main():
