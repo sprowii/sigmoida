@@ -405,7 +405,7 @@ async def autopost_job(context: CallbackContext):
             log.exception(e)
 
 # ---------- MAIN ----------
-async def main():
+def main():
     token = os.getenv("TG_TOKEN")
     if not token:
         raise RuntimeError("TG_TOKEN env not set")
@@ -428,21 +428,17 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    # Проверка моделей при старте и каждые 4 часа (14400 сек)
-    log.info("Initial model check...")
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, check_available_models)
-    
     # Используем job_queue для периодических задач (если доступен)
     if app.job_queue:
-        app.job_queue.run_repeating(check_models_job, interval=14400, first=14400)
+        # Первая проверка моделей через 60 секунд после старта
+        app.job_queue.run_repeating(check_models_job, interval=14400, first=60)
         app.job_queue.run_repeating(autopost_job, interval=60, first=60)
         log.info("JobQueue initialized")
     else:
         log.warning("JobQueue not available - scheduled jobs disabled")
 
     log.info("Bot started 🚀")
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=None)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
