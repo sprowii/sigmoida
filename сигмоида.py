@@ -461,12 +461,14 @@ async def main():
                 log.exception(f"Error in autopost_job: {e}")
             await asyncio.sleep(60)  # каждые 60 секунд
     
-    # Запускаем фоновые задачи
-    asyncio.create_task(periodic_tasks())
-    asyncio.create_task(autopost_tasks())
-
     log.info("Bot started 🚀")
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+    # Запускаем polling и фоновые задачи параллельно
+    await asyncio.gather(
+        app.run_polling(allowed_updates=Update.ALL_TYPES),
+        periodic_tasks(),
+        autopost_tasks()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
