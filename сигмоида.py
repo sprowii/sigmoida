@@ -56,19 +56,17 @@ def home():
 
 # ---------- Политика конфиденциальности ----------
 PRIVACY_POLICY_TEXT = """
+<b>Политика конфиденциальности и обработки данных Сигмоида</b>
 
-<b>Политика Конфиденциальности и Обработки Данных бота 'Сигмоида'</b>
+⚠️ <b>Важно:</b> Ваши сообщения и изображения, отправленные этому боту, передаются в Google Gemini API для обработки. Это необходимо для функционирования бота и генерации ответов.
+История диалога хранится только временно в оперативной памяти бота и не сохраняется на сервере на постоянной основе.
+Используя бота, вы соглашаетесь с передачей данных в Google для их обработки.
 
-Используя бота 'Сигмоида', вы соглашаетесь с настоящей Политикой Конфиденциальности.
+<b>Согласие:</b> Продолжая использовать бота в личных сообщениях или отправляя упоминания боту в групповых чатах, вы подтверждаете свое согласие с данной политикой. Администраторы групповых чатов несут ответственность за информирование участников о том, что их сообщения могут обрабатываться ботом через сторонний API.
 
-В групповых чатах, если вы отправляете сообщения или иным образом взаимодействуете с ботом после ознакомления с данной Политикой (или с возможностью ознакомиться с ней через команды /start или /help), это считается вашим согласием на обработку данных.
+<b>Дополнительно:</b> Наш бот также подпадает под действие <b>Стандартной политики конфиденциальности Telegram для ботов</b>. Ознакомиться с ней можно по ссылке: <a href="https://telegram.org/privacy-tpa">https://telegram.org/privacy-tpa</a>. Эта политика является общей, и мы рекомендуем вам ознакомиться с ней для полного понимания того, как Telegram регулирует работу ботов на своей платформе.
 
-1.  <b>Собираемые данные:</b> Бот обрабатывает текстовые сообщения и изображения, которые вы отправляете.
-2.  <b>Цель обработки:</b> Все сообщения и изображения передаются в <a href='https://ai.google.dev/' target='_blank'>Google Gemini API</a> для генерации ответов и анализа.
-3.  <b>Хранение данных:</b> История вашего диалога с ботом хранится исключительно в оперативной памяти сервера на время активной сессии и не сохраняется на постоянной основе. После перезапуска бота или завершения вашей сессии, история диалога удаляется. Бот не хранит ваши личные данные, такие как имя пользователя Telegram или chat_id, за исключением временных технических идентификаторов, необходимых для поддержания диалога в рамках одной сессии.
-4.  <b>Сторонние сервисы:</b> Передача данных в Google Gemini API означает, что ваши данные будут обрабатываться в соответствии с политикой конфиденциальности Google. Пожалуйста, ознакомьтесь с <a href='https://policies.google.com/privacy' target='_blank'>Политикой конфиденциальности Google</a>.
-5.  <b>Согласие:</b> Продолжая использовать бота, вы подтверждаете свое согласие на обработку ваших сообщений и изображений в соответствии с этой Политикой. Если вы не согласны, пожалуйста, прекратите использование бота.
-
+Для удаления ваших данных, пожалуйста, свяжитесь с разработчиками бота.
 """
 
 # Gemini API конфиг
@@ -110,6 +108,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 log = logging.getLogger("wizardbot")
+
+# ---------- Константы и глобальные переменные ----------
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 # ---------- Конфиг на чат ----------
 @dataclass
@@ -229,13 +230,35 @@ def check_available_models() -> List[str]:
     return available_models
 
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверка, является ли автор админом в группе/супергруппе."""
-    if update.effective_chat.type == "private":
-        return True  # в личке все права
-    member = await context.bot.get_chat_member(
-        update.effective_chat.id, update.effective_user.id
-    )
-    return member.status in ("administrator", "creator")
+    """Проверяет, является ли пользователь админом."""
+    if update.message and str(update.message.from_user.id) == ADMIN_ID:
+        return True
+    
+    # Отправляем сообщение только если это прямой вызов команды, а не фоновая проверка
+    if update.message:
+        await update.message.reply_text("Эта команда доступна только администратору.")
+    return False
+
+async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Админ) Удаляет данные чата по его ID."""
+    if not await is_admin(update, context): return
+
+    if not context.args:
+        await update.message.reply_text("Нужно указать ID чата/пользователя. Пример: /delete_data 123456789")
+        return
+
+    try:
+        target_id = int(context.args[0])
+        deleted_from_history = history.pop(target_id, None) is not None
+        deleted_from_settings = configs.pop(target_id, None) is not None
+
+        if deleted_from_history or deleted_from_settings:
+            await update.message.reply_text(f"Данные для ID {target_id} были удалены из памяти бота.")
+        else:
+            await update.message.reply_text(f"Данные для ID {target_id} не найдены в памяти бота.")
+
+    except (ValueError, IndexError):
+        await update.message.reply_text("Неверный ID. ID должен быть числом.")
 
 def answer_size_prompt(size: str) -> str:
     mapping = {
@@ -351,6 +374,28 @@ async def set_msgsize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Размер ответов = {size}")
 
 # ---------- Основной обработчик текста ----------
+async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, prompt: str, image: Optional[Image.Image] = None):
+    """Общая логика для отправки ответа от LLM."""
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    loop = asyncio.get_running_loop()
+    try:
+        reply, model_used = await loop.run_in_executor(None, llm_request, chat_id, prompt, image)
+        model_display = model_used.replace("gemini-", "").replace("-", " ").title()
+        full_reply = f"*{model_display}*\n\n{reply}"
+        
+        sanitized_reply = sanitize_telegram_markdown(full_reply)
+        
+        for chunk in split_long_message(sanitized_reply):
+            try:
+                await update.message.reply_text(chunk, parse_mode="MarkdownV2", disable_web_page_preview=True)
+            except BadRequest as e:
+                log.warning(f"MarkdownV2 failed, sending plain text: {e}")
+                await update.message.reply_text(chunk, disable_web_page_preview=True)
+
+    except Exception as e:
+        log.exception(e)
+        await update.message.reply_text("⚠️ Ошибка модели.", disable_web_page_preview=True)
+
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -365,36 +410,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sys_prompt = answer_size_prompt(cfg.msg_size)
     prompt = f"{sys_prompt}\n{text}" if sys_prompt else text
 
-    await context.bot.send_chat_action(chat_id, "typing")
-    loop = asyncio.get_event_loop()
-    try:
-        reply, model_used = await loop.run_in_executor(None, llm_request, chat_id, prompt)
-        # Показываем модель перед ответом
-        model_display = model_used.replace("gemini-", "").replace("-", " ").title()
-        full_reply = f"🤖 {model_display}\n\n{reply}"
-    except Exception as e:
-        log.exception(e)
-        full_reply = "⚠️ Ошибка модели."
-
-    # Очищаем и разбиваем длинные сообщения
-    sanitized_reply = sanitize_telegram_markdown(full_reply)
-    message_parts = split_long_message(sanitized_reply)
-    for i, part in enumerate(message_parts):
-        try:
-            await update.message.reply_text(
-                part, disable_web_page_preview=True, parse_mode="Markdown"
-            )
-        except BadRequest as e:
-            if "entities" in str(e).lower() or "parse" in str(e).lower():
-                log.warning("Markdown parse failed, sending plain text. Error: %s", e)
-                await update.message.reply_text(part, disable_web_page_preview=True)
-            elif "too long" in str(e).lower():
-                # Если даже без Markdown слишком длинное, разбиваем ещё больше
-                plain_parts = split_long_message(part, max_length=4000)
-                for plain_part in plain_parts:
-                    await update.message.reply_text(plain_part, disable_web_page_preview=True)
-            else:
-                log.error("Failed to send message: %s", e)
+    await send_bot_response(update, context, chat_id, prompt)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,47 +429,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     photo = photos[-1]
     
-    await context.bot.send_chat_action(chat_id, "typing")
-    
-    # Скачиваем фото
-    file = await context.bot.get_file(photo.file_id)
-    photo_bytes = await file.download_as_bytearray()
-    
-    # Конвертируем в PIL Image
-    image = Image.open(io.BytesIO(photo_bytes))
-    
-    # LLM prompt
-    sys_prompt = answer_size_prompt(cfg.msg_size)
-    prompt = f"{sys_prompt}\n{text}" if sys_prompt else text
-    
-    loop = asyncio.get_event_loop()
-    try:
-        reply, model_used = await loop.run_in_executor(None, llm_request, chat_id, prompt, image)
-        # Показываем модель перед ответом
-        model_display = model_used.replace("gemini-", "").replace("-", " ").title()
-        full_reply = f"🤖 {model_display}\n\n{reply}"
-    except Exception as e:
-        log.exception(e)
-        full_reply = "⚠️ Ошибка модели."
-    
-    # Очищаем и разбиваем длинные сообщения
-    sanitized_reply = sanitize_telegram_markdown(full_reply)
-    message_parts = split_long_message(sanitized_reply)
-    for i, part in enumerate(message_parts):
-        try:
-            await update.message.reply_text(
-                part, disable_web_page_preview=True, parse_mode="Markdown"
-            )
-        except BadRequest as e:
-            if "entities" in str(e).lower() or "parse" in str(e).lower():
-                log.warning("Markdown parse failed, sending plain text. Error: %s", e)
-                await update.message.reply_text(part, disable_web_page_preview=True)
-            elif "too long" in str(e).lower():
-                plain_parts = split_long_message(part, max_length=4000)
-                for plain_part in plain_parts:
-                    await update.message.reply_text(plain_part, disable_web_page_preview=True)
-            else:
-                log.error("Failed to send message: %s", e)
+    await send_bot_response(update, context, chat_id, text, image)
 
 # ---------- JOB для проверки моделей ----------
 async def check_models_job(context: CallbackContext):
@@ -511,7 +487,11 @@ def main(): # <--- Снова делаем main синхронной
     if not token:
         raise RuntimeError("TG_TOKEN env not set")
 
-    # Получаем ID бота с помощью прямого HTTP-запроса
+    # Проверка наличия ADMIN_ID при запуске
+    if not ADMIN_ID:
+        raise RuntimeError("ADMIN_ID env not set. Бот не сможет определить администратора.")
+
+    # Получаем ID и username бота с помощью прямого HTTP-запроса
     try:
         response = requests.get(f"https://api.telegram.org/bot{token}/getMe")
         response.raise_for_status() # Вызовет ошибку для плохих статусов HTTP
@@ -538,8 +518,13 @@ def main(): # <--- Снова делаем main синхронной
     app.add_handler(CommandHandler("autopost", autopost_switch))
     app.add_handler(CommandHandler(f"autopost_{bot_username}", autopost_switch)) # Для совместимости с упоминаниями
     app.add_handler(CommandHandler("set_interval", set_interval))
+    app.add_handler(CommandHandler(f"set_interval_{bot_username}", set_interval)) # Для совместимости с упоминаниями
     app.add_handler(CommandHandler("set_msgsize", set_msgsize))
+    app.add_handler(CommandHandler(f"set_msgsize_{bot_username}", set_msgsize)) # Для совместимости с упоминаниями
     app.add_handler(CommandHandler("privacy", privacy_cmd))
+    app.add_handler(CommandHandler(f"privacy_{bot_username}", privacy_cmd)) # Для совместимости с упоминаниями
+    app.add_handler(CommandHandler("delete_data", delete_data)) # <-- Добавляем новую команду
+    app.add_handler(CommandHandler(f"delete_data_{bot_username}", delete_data)) # Для совместимости с упоминаниями
 
     # Обработка текстовых сообщений (только по упоминанию бота в группах, обычный текст в личных)
     # Используем заранее полученный bot_id
