@@ -34,7 +34,7 @@ HTML_TEMPLATE = """
     <div class="hero"> <!-- Используем hero класс для центрирования и стилизации -->
         <div class="hero-content">
             <h1>Бро, я запустился</h1>
-            <p>Если я правильно понял, то бот может работать ещё 15 минут, если тебе пришлось посетить этот сайт, а если он будет работать и больше, значит тебе его и не надо было посещать.</p>
+            <p>Если я правильно понял, то бот может работать ещё 15 минут, если тебе пришлось посетить этот сайт, а если он будет работать и больше, значит тебе его и не надо было посещать.\n</p>
             <div class="tenor-gif-embed" data-postid="13327394754582742145" data-share-method="host" data-aspect-ratio="1" data-width="100%">
                 <a href="https://tenor.com/view/cologne-wear-i-buddy-home-gif-13327394754582742145">Cologne Wear GIF</a>
                 from <a href="https://tenor.com/search/cologne-gifs">Cologne GIFs</a>
