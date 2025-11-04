@@ -12,7 +12,7 @@ from telegram.ext import (
     CommandHandler, MessageHandler, filters, CallbackContext
 )
 import google.generativeai as genai
-from google.generativeai.types import GenerationConfig, ContentType, PartType, Tool, FunctionCall
+from google.generativeai.types import GenerationConfig, ContentType, PartType, Tool
 from flask import Flask, render_template_string
 import threading
 import requests
@@ -164,7 +164,7 @@ def get_cfg(chat_id: int) -> ChatConfig:
         configs[chat_id] = ChatConfig()
     return configs[chat_id]
 
-def llm_request(chat_id: int, prompt_parts: List[PartType]) -> Tuple[Optional[str], str, Optional[FunctionCall]]:
+def llm_request(chat_id: int, prompt_parts: List[PartType]) -> Tuple[Optional[str], str, Optional[genai.types.FunctionCall]]:
     global current_key_idx, current_model_idx
     chat_history = history.get(chat_id, [])
 
