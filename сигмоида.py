@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # filename: wizard_bot.py
-import os, asyncio, logging, time, io, re, json, atexit
+import os, asyncio, logging, time, io, re, json
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple, Any
 from PIL import Image
-from telegram import Update, File
+from telegram import Update
 from telegram.constants import ChatType, MessageEntityType, ParseMode, Chat, ChatMember
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -12,14 +12,25 @@ from telegram.ext import (
     CommandHandler, MessageHandler, filters, CallbackContext
 )
 import google.generativeai as genai
-from google.generativeai.types import GenerationConfig, ContentType, PartType, Tool
-from flask import Flask, render_template_string, request, abort, send_from_directory
+from google.generativeai.types import ContentType, PartType, Tool
+from flask import Flask, render_template_string, request, abort, Response
 import threading
 import requests
 from dotenv import load_dotenv
 import base64
+import redis
 
 load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    raise RuntimeError("Переменная окружения REDIS_URL должна быть установлена")
+
+try:
+    redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    redis_client.ping()
+except Exception as exc:
+    raise RuntimeError("Не удалось подключиться к Redis") from exc
 
 # Создаем простое Flask-приложение для веб-сервера
 flask_app = Flask(__name__)
@@ -72,29 +83,47 @@ def download_history():
         abort(403)
 
     try:
-        return send_from_directory(
-            directory=DATA_DIR,
-            path='history.json',
-            as_attachment=True
+        history_snapshot: Dict[str, Any] = {}
+        for key in redis_client.scan_iter(match="history:*"):
+            chat_id = key.split(":", 1)[1]
+            raw_value = redis_client.get(key)
+            if raw_value:
+                history_snapshot[chat_id] = json.loads(raw_value)
+
+        response = Response(
+            json.dumps(history_snapshot, ensure_ascii=False, indent=2),
+            mimetype="application/json"
         )
-    except FileNotFoundError:
-        abort(404)
+        response.headers["Content-Disposition"] = "attachment; filename=history.json"
+        return response
+    except Exception as exc:
+        log.error(f"Не удалось выгрузить историю из Redis: {exc}", exc_info=True)
+        abort(500)
 
 # ---------- Политика конфиденциальности ----------
 PRIVACY_POLICY_TEXT = """
-<b>Политика конфиденциальности и обработки данных Сигмоида</b>
+<b>Политика Конфиденциальности для бота "Сигмоида"</b>
 
-⚠️ <b>Важно:</b> Ваши сообщения, изображения и другие медиафайлы, отправленные этому боту, передаются в Google Gemini API для обработки. Это необходимо для функционирования бота и генерации ответов.
-История диалога и настройки чатов сохраняются в JSON-файлах на сервере для обеспечения непрерывности диалога между перезапусками.
-Используя бота, вы соглашаетесь с передачей данных в Google для их обработки и хранением данных на сервере.
+<i>Дата последнего обновления: 4 ноября 2025 г.</i>
 
-<b>Согласие:</b> Продолжая использовать бота в личных сообщениях или отправляя упоминания боту в групповых чатах, вы подтверждаете свое согласие с данной политикой. Администраторы групповых чатов несут ответственность за информирование участников о том, что их сообщения могут обрабатываться ботом через сторонний API.
+<b>Собираемые данные</b>
+Бот хранит историю переписки (текст, фото, медиа) и настройки для поддержания контекста диалога.
 
-<b>Улучшение сервиса:</b> Для целей отладки и повышения качества сервиса разработчики могут иметь доступ к анонимизированной истории диалогов. Эти данные используются исключительно для улучшения работы бота и не передаются третьим лицам, за исключением случаев, описанных в этой политике.
+<b>Использование данных</b>
+Данные используются для обеспечения непрерывности диалога и улучшения качества ответов.
 
-<b>Дополнительно:</b> Наш бот также подпадает под действие <b>Стандартной политики конфиденциальности Telegram для ботов</b>. Ознакомиться с ней можно по ссылке: <a href="https://telegram.org/privacy-tpa">https://telegram.org/privacy-tpa</a>.
+<b>Хранение и безопасность</b>
+Данные хранятся в удаленной базе данных Redis.
 
-Для удаления ваших данных, пожалуйста, свяжитесь с разработчиками бота.
+<b>Удаление ваших данных</b>
+Вы можете удалить все свои данные в любой момент:
+• <b>В личных чатах:</b> Отправьте команду <code>/delete_data</code>.
+• <b>В групповых чатах:</b> Команду <code>/delete_data</code> могут использовать только администраторы группы.
+
+После выполнения команды все данные для чата будут безвозвратно удалены.
+
+<b>Сторонние сервисы</b>
+Ваши сообщения обрабатываются через API Google Gemini.
 """
 
 # Gemini API конфиг
@@ -139,9 +168,8 @@ log = logging.getLogger("wizardbot")
 # ---------- Константы и глобальные переменные ----------
 ADMIN_ID = os.getenv("ADMIN_ID")
 DOWNLOAD_KEY = os.getenv("DOWNLOAD_KEY")
-DATA_DIR = "data"
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
-CONFIGS_FILE = os.path.join(DATA_DIR, "configs.json")
+HISTORY_KEY_PREFIX = "history:"
+CONFIG_KEY_PREFIX = "config:"
 
 # ---------- Конфиг на чат ----------
 @dataclass
@@ -187,60 +215,114 @@ def convert_history_to_dict(history_item):
         return history_item
     return history_item
 
+
+def _deserialize_part(part: Any):
+    if isinstance(part, dict):
+        if 'text' in part:
+            return {'text': part['text']}
+        inline_data = part.get('inline_data')
+        if isinstance(inline_data, dict) and inline_data.get('mime_type') and inline_data.get('data'):
+            try:
+                return genai.types.Part(
+                    inline_data=genai.types.Blob(
+                        mime_type=inline_data['mime_type'],
+                        data=base64.b64decode(inline_data['data'].encode('utf-8'))
+                    )
+                )
+            except Exception as exc:
+                log.warning(f"Не удалось десериализовать часть истории: {exc}")
+                return {'inline_data': inline_data}
+    return part
+
+
 def load_data():
     global history, configs
-    os.makedirs(DATA_DIR, exist_ok=True)
+    log.info("Загрузка данных из Redis...")
     try:
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            loaded_history = json.load(f)
-            # При загрузке, декодируем Base64 и воссоздаем объекты PartType, если это inline_data
-            history = {
-                int(chat_id): [
-                    {
-                        'role': item['role'],
-                        'parts': [
-                            {
-                                'text': part['text']
-                            } if 'text' in part else (
-                                genai.types.Part(
-                                    inline_data=genai.types.Blob(
-                                        mime_type=part['inline_data']['mime_type'],
-                                        data=base64.b64decode(part['inline_data']['data'].encode('utf-8'))
-                                    )
-                                )
-                            )
-                            for part in item['parts']
-                        ]
-                    }
-                    for item in chat_history
-                ]
-                for chat_id, chat_history in loaded_history.items()
-            }
-            log.info(f"Loaded {len(history)} chat histories.")
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        log.warning(f"History file not found or is invalid ({e}), starting fresh.")
+        loaded_history: Dict[int, List[ContentType]] = {}
+        for key in redis_client.scan_iter(match=f"{HISTORY_KEY_PREFIX}*"):
+            chat_id_part = key.split(":", 1)[1]
+            raw_value = redis_client.get(key)
+            if not raw_value:
+                continue
+            try:
+                chat_history = json.loads(raw_value)
+            except json.JSONDecodeError as exc:
+                log.warning(f"Некорректный JSON истории для чата {chat_id_part}: {exc}")
+                continue
+            try:
+                chat_id = int(chat_id_part)
+            except ValueError:
+                log.warning(f"Пропускаем историю с некорректным chat_id: {chat_id_part}")
+                continue
+            loaded_history[chat_id] = [
+                {
+                    'role': item.get('role'),
+                    'parts': [_deserialize_part(part) for part in item.get('parts', [])]
+                }
+                for item in chat_history
+            ]
+        history = loaded_history
+        log.info(f"Загружено {len(history)} историй чатов из Redis.")
+    except Exception as exc:
+        log.error(f"Ошибка при загрузке историй из Redis: {exc}", exc_info=True)
         history = {}
 
-def save_data():
-    log.info("Saving data...")
-    os.makedirs(DATA_DIR, exist_ok=True)
     try:
-        # Конвертируем историю из объектов Content в словари для JSON сериализации
-        history_to_save = {
-            chat_id: [convert_history_to_dict(item) for item in chat_history]
-            for chat_id, chat_history in history.items()
-        }
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history_to_save, f, ensure_ascii=False, indent=2)
-        configs_to_save = {cid: asdict(cfg) for cid, cfg in configs.items()}
-        with open(CONFIGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(configs_to_save, f, ensure_ascii=False, indent=2)
-        log.info("Data saved.")
-    except Exception as e:
-        log.error(f"Failed to save data: {e}", exc_info=True)
+        loaded_configs: Dict[int, ChatConfig] = {}
+        for key in redis_client.scan_iter(match=f"{CONFIG_KEY_PREFIX}*"):
+            chat_id_part = key.split(":", 1)[1]
+            raw_value = redis_client.get(key)
+            if not raw_value:
+                continue
+            try:
+                config_payload = json.loads(raw_value)
+            except json.JSONDecodeError as exc:
+                log.warning(f"Некорректный JSON конфигурации для чата {chat_id_part}: {exc}")
+                continue
+            try:
+                chat_id = int(chat_id_part)
+            except ValueError:
+                log.warning(f"Пропускаем конфигурацию с некорректным chat_id: {chat_id_part}")
+                continue
+            try:
+                loaded_configs[chat_id] = ChatConfig(**config_payload)
+            except TypeError as exc:
+                log.warning(f"Некорректные данные конфигурации для чата {chat_id}: {exc}")
+        configs = loaded_configs
+        log.info(f"Загружено {len(configs)} конфигураций чатов из Redis.")
+    except Exception as exc:
+        log.error(f"Ошибка при загрузке конфигураций из Redis: {exc}", exc_info=True)
+        configs = {}
 
-async def save_data_job(context: CallbackContext):
-    await asyncio.get_running_loop().run_in_executor(None, save_data)
+
+def save_chat_data(chat_id: int):
+    history_key = f"{HISTORY_KEY_PREFIX}{chat_id}"
+    config_key = f"{CONFIG_KEY_PREFIX}{chat_id}"
+
+    try:
+        with redis_client.pipeline() as pipe:
+            if chat_id in history:
+                serialized_history = [
+                    convert_history_to_dict(item) for item in history[chat_id]
+                ]
+                pipe.set(history_key, json.dumps(serialized_history, ensure_ascii=False))
+            else:
+                pipe.delete(history_key)
+
+            if chat_id in configs:
+                pipe.set(config_key, json.dumps(asdict(configs[chat_id]), ensure_ascii=False))
+            else:
+                pipe.delete(config_key)
+
+            pipe.execute()
+    except Exception as exc:
+        log.error(f"Не удалось сохранить данные чата {chat_id} в Redis: {exc}", exc_info=True)
+
+
+async def persist_chat_data(chat_id: int):
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, save_chat_data, chat_id)
 
 # ---------- Вспомогалки ----------
 def get_cfg(chat_id: int) -> ChatConfig:
@@ -393,7 +475,9 @@ async def privacy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(PRIVACY_POLICY_TEXT, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    history.pop(update.effective_chat.id, None)
+    chat_id = update.effective_chat.id
+    history.pop(chat_id, None)
+    await persist_chat_data(chat_id)
     await update.message.reply_text("История очищена ✅")
 async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_chat or not update.effective_user: return
@@ -443,9 +527,11 @@ async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del configs[chat_id]
             log.info(f"Deleted configs for chat_id {chat_id}.")
 
-        # Сохраняем изменения немедленно
-        save_data()
-        log.info(f"Data for chat_id {chat_id} saved after deletion.")
+        try:
+            redis_client.delete(f"{HISTORY_KEY_PREFIX}{chat_id}", f"{CONFIG_KEY_PREFIX}{chat_id}")
+            log.info(f"Удалены ключи Redis для чата {chat_id}.")
+        except Exception as exc:
+            log.error(f"Не удалось удалить ключи Redis для чата {chat_id}: {exc}", exc_info=True)
 
         await update.message.reply_html(
             "<b>Все данные для этого чата (история переписки и настройки) были успешно удалены.</b>\n"
@@ -458,6 +544,10 @@ async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         history.pop(target_id, None)
         configs.pop(target_id, None)
+        try:
+            redis_client.delete(f"{HISTORY_KEY_PREFIX}{target_id}", f"{CONFIG_KEY_PREFIX}{target_id}")
+        except Exception as exc:
+            log.error(f"Не удалось удалить данные чата {target_id} из Redis: {exc}", exc_info=True)
         await update.message.reply_text(f"Данные для ID {target_id} удалены.")
     except (ValueError, IndexError):
         await update.message.reply_text("Неверный ID.")
@@ -474,6 +564,7 @@ async def autopost_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or context.args[0] not in {"on", "off"}: return await update.message.reply_text("Пример: /autopost on")
     cfg = get_cfg(update.effective_chat.id)
     cfg.autopost_enabled = (context.args[0] == "on")
+    await persist_chat_data(update.effective_chat.id)
     await update.message.reply_text(f"Автопосты {'включены' if cfg.autopost_enabled else 'выключены'}.")
 
 async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -481,6 +572,7 @@ async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         cfg = get_cfg(update.effective_chat.id)
         cfg.interval = max(300, int(context.args[0]))
+        await persist_chat_data(update.effective_chat.id)
         await update.message.reply_text(f"Интервал автопоста = {cfg.interval} сек.")
     except (IndexError, ValueError):
         await update.message.reply_text("Пример: /set_interval 7200")
@@ -490,6 +582,7 @@ async def set_minmsgs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         cfg = get_cfg(update.effective_chat.id)
         cfg.min_messages = max(1, int(context.args[0]))
+        await persist_chat_data(update.effective_chat.id)
         await update.message.reply_text(f"Минимум сообщений = {cfg.min_messages}.")
     except (IndexError, ValueError):
         await update.message.reply_text("Пример: /set_minmsgs 10")
@@ -506,6 +599,7 @@ async def set_msgsize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cfg.msg_size = size[0]
     else:
         cfg.msg_size = ""
+    await persist_chat_data(update.effective_chat.id)
     await update.message.reply_text(f"Размер ответов = {cfg.msg_size or 'default'}.")
 
 async def draw_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -529,13 +623,14 @@ async def generate_and_send_image(update: Update, context: ContextTypes.DEFAULT_
 # ---------- Основной обработчик ----------
 async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, prompt_parts: List[PartType]):
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    data_updated = False
     try:
         reply, model_used, function_call = await asyncio.get_running_loop().run_in_executor(None, llm_request, chat_id, prompt_parts)
 
         if function_call and function_call.name == "generate_image":
-            return await generate_and_send_image(update, context, function_call.args.get("prompt", ""))
-
-        if reply:
+            await generate_and_send_image(update, context, function_call.args.get("prompt", ""))
+            data_updated = True
+        elif reply:
             model_display = model_used.replace("gemini-", "").replace("-latest", "").title()
             full_reply = f"<b>{model_display}</b>\n\n{reply}"
             for chunk in split_long_message(full_reply):
@@ -546,14 +641,19 @@ async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                     # Strip HTML tags before sending as plain text
                     plain_text_chunk = strip_html_tags(chunk)
                     await update.message.reply_text(plain_text_chunk, disable_web_page_preview=True)
+            data_updated = True
     except Exception as e:
         log.exception(e)
         await update.message.reply_text("⚠️ Ошибка модели.")
+    finally:
+        if data_updated:
+            await persist_chat_data(chat_id)
 
 async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message: return
     chat_id = update.effective_chat.id
     text = update.message.text or update.message.caption or ""
+    cfg = get_cfg(chat_id)
 
     if update.message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
         bot_mentioned = any(
@@ -563,15 +663,16 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
         is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.username == context.bot.username
         
         if not (bot_mentioned or is_reply_to_bot):
-            get_cfg(chat_id).new_msg_counter += 1
+            cfg.new_msg_counter += 1
+            await persist_chat_data(chat_id)
             return
         
         for e in reversed(update.message.entities or []):
             if e.type == MessageEntityType.MENTION and text[e.offset:e.offset+e.length].lstrip('@').lower() == context.bot.username.lower():
                 text = (text[:e.offset] + text[e.offset+e.length:]).strip()
     
-    cfg = get_cfg(chat_id)
     cfg.new_msg_counter += 1
+    await persist_chat_data(chat_id)
     prompt_parts = []
     if text: prompt_parts.append(answer_size_prompt(cfg.msg_size) + text)
     if update.message.photo:
@@ -631,14 +732,13 @@ async def autopost_job(context: CallbackContext):
                     except BadRequest:
                         await context.bot.send_message(chat_id, chunk)
                 cfg.last_post_ts, cfg.new_msg_counter = time.time(), 0
+                await persist_chat_data(chat_id)
         except Exception as e:
             log.error(f"Autopost failed for chat {chat_id}: {e}")
 
 # ---------- Main ----------
 def main():
     load_data()
-    atexit.register(save_data)
-
     token, admin_id = os.getenv("TG_TOKEN"), os.getenv("ADMIN_ID")
     if not token or not admin_id: raise RuntimeError("TG_TOKEN и ADMIN_ID должны быть установлены")
     if not DOWNLOAD_KEY:
@@ -671,7 +771,6 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handle_media))
 
     if app.job_queue:
-        app.job_queue.run_repeating(save_data_job, 60, 60)
         app.job_queue.run_repeating(check_models_job, 14400, 60)
         app.job_queue.run_repeating(autopost_job, 60, 60)
         log.info("JobQueue initialized")
