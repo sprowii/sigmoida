@@ -525,7 +525,7 @@ def main():
         raise RuntimeError(f"Ошибка при получении информации о боте: {e}")
 
     app = ApplicationBuilder().token(token).build()
-    app.bot.username = bot_info['username']
+    bot_username = bot_info['username']  # Сохраняем username для использования в регистрации команд
 
     command_handlers = {
         "start": start, "help": help_cmd, "privacy": privacy_cmd,
@@ -537,7 +537,7 @@ def main():
     for command, callback in command_handlers.items():
         app.add_handler(CommandHandler(command, callback))
         # Добавляем алиасы для групп (e.g. /draw@botname)
-        app.add_handler(CommandHandler(f"{command}_{app.bot.username}", callback))
+        app.add_handler(CommandHandler(f"{command}_{bot_username}", callback))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_and_photo))
     app.add_handler(MessageHandler(filters.PHOTO, handle_text_and_photo))
