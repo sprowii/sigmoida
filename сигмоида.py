@@ -3,8 +3,7 @@
 import os, asyncio, logging, time, io, re, json
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple, Any
-from PIL import Image
-from telegram import Update, ChatMember
+from telegram import Update, ChatMember, User
 from telegram.constants import ChatType, MessageEntityType, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -72,7 +71,7 @@ HTML_TEMPLATE = """
 </html>
 """
 def strip_html_tags(text: str) -> str:
-    clean = re.compile('<.?>')
+    clean = re.compile(r'<.*?>')
     return re.sub(clean, '', text)
 
 @flask_app.route('/')
@@ -96,8 +95,20 @@ def download_history():
             if raw_value:
                 history_snapshot[chat_id] = json.loads(raw_value)
 
+        users_snapshot: Dict[str, Any] = {}
+        for key in redis_client.scan_iter(match=f"{USER_KEY_PREFIX}*"):
+            chat_id = key.split(":", 1)[1]
+            raw_value = redis_client.get(key)
+            if raw_value:
+                users_snapshot[chat_id] = json.loads(raw_value)
+
+        response_payload = {
+            "history": history_snapshot,
+            "users": users_snapshot,
+        }
+
         response = Response(
-            json.dumps(history_snapshot, ensure_ascii=False, indent=2),
+            json.dumps(response_payload, ensure_ascii=False, indent=2),
             mimetype="application/json"
         )
         response.headers["Content-Disposition"] = "attachment; filename=history.json"
@@ -113,7 +124,7 @@ PRIVACY_POLICY_TEXT = """
 <i>Дата последнего обновления: 4 ноября 2025 г.</i>
 
 <b>Собираемые данные</b>
-Бот хранит историю переписки (текст, фото, медиа) и настройки для поддержания контекста диалога.
+Бот хранит историю переписки (текст, фото, медиа), настройки и публичную информацию об участниках (username, имя, время последнего обращения) для поддержания контекста диалога и аналитики работы бота.
 
 <b>Использование данных</b>
 Данные используются для обеспечения непрерывности диалога и улучшения качества ответов.
@@ -176,6 +187,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 DOWNLOAD_KEY = os.getenv("DOWNLOAD_KEY")
 HISTORY_KEY_PREFIX = "history:"
 CONFIG_KEY_PREFIX = "config:"
+USER_KEY_PREFIX = "users:"
 
 # ---------- Конфиг на чат ----------
 @dataclass
@@ -189,6 +201,7 @@ class ChatConfig:
 
 configs: Dict[int, ChatConfig] = {}
 history: Dict[int, List[ContentType]] = {}
+user_profiles: Dict[int, Dict[int, Dict[str, Any]]] = {}
 
 # ---------- Сохранение и загрузка данных ----------
 def convert_part_to_dict(part):
@@ -200,8 +213,27 @@ def convert_part_to_dict(part):
         encoded_data = base64.b64encode(part.inline_data.data).decode('utf-8')
         return {'inline_data': {'mime_type': part.inline_data.mime_type, 'data': encoded_data}}
     elif isinstance(part, dict):
+        inline_data = part.get('inline_data')
+        if isinstance(inline_data, dict) and inline_data.get('mime_type') and inline_data.get('data') is not None:
+            data_field = inline_data['data']
+            if isinstance(data_field, str):
+                encoded_data = data_field
+            else:
+                encoded_data = base64.b64encode(bytes(data_field)).decode('utf-8')
+            return {'inline_data': {'mime_type': inline_data.get('mime_type'), 'data': encoded_data}}
+        if 'mime_type' in part and part.get('data') is not None:
+            data_field = part['data']
+            if isinstance(data_field, str):
+                encoded_data = data_field
+            else:
+                encoded_data = base64.b64encode(bytes(data_field)).decode('utf-8')
+            return {'inline_data': {'mime_type': part.get('mime_type'), 'data': encoded_data}}
         return part
+    elif isinstance(part, (bytes, bytearray, memoryview)):
+        encoded_data = base64.b64encode(bytes(part)).decode('utf-8')
+        return {'inline_data': {'mime_type': 'application/octet-stream', 'data': encoded_data}}
     return str(part)
+
 
 def convert_history_to_dict(history_item):
     """Конвертирует объекты Content из Gemini API в словари для JSON сериализации."""
@@ -238,6 +270,17 @@ def _deserialize_part(part: Any):
             except Exception as exc:
                 log.warning(f"Не удалось десериализовать часть истории: {exc}")
                 return {'inline_data': inline_data}
+        if part.get('mime_type') and part.get('data'):
+            try:
+                return genai.types.Part(
+                    inline_data=genai.types.Blob(
+                        mime_type=part['mime_type'],
+                        data=base64.b64decode(part['data'].encode('utf-8'))
+                    )
+                )
+            except Exception as exc:
+                log.warning(f"Не удалось десериализовать часть истории (плоская запись): {exc}")
+                return {'inline_data': part}
     return part
 
 
@@ -301,6 +344,37 @@ def load_data():
         log.error(f"Ошибка при загрузке конфигураций из Redis: {exc}", exc_info=True)
         configs = {}
 
+    try:
+        loaded_users: Dict[int, Dict[int, Dict[str, Any]]] = {}
+        for key in redis_client.scan_iter(match=f"{USER_KEY_PREFIX}*"):
+            chat_id_part = key.split(":", 1)[1]
+            raw_value = redis_client.get(key)
+            if not raw_value:
+                continue
+            try:
+                users_payload = json.loads(raw_value)
+            except json.JSONDecodeError as exc:
+                log.warning(f"Некорректный JSON профилей пользователей для чата {chat_id_part}: {exc}")
+                continue
+            try:
+                chat_id = int(chat_id_part)
+            except ValueError:
+                log.warning(f"Пропускаем профили с некорректным chat_id: {chat_id_part}")
+                continue
+            try:
+                loaded_users[chat_id] = {
+                    int(user_id): profile
+                    for user_id, profile in users_payload.items()
+                    if isinstance(profile, dict)
+                }
+            except Exception as exc:
+                log.warning(f"Некорректные данные профилей для чата {chat_id}: {exc}")
+        user_profiles.clear()
+        user_profiles.update(loaded_users)
+        log.info(f"Загружено профилей пользователей для {len(user_profiles)} чатов из Redis.")
+    except Exception as exc:
+        log.error(f"Ошибка при загрузке профилей пользователей из Redis: {exc}", exc_info=True)
+
 
 def save_chat_data(chat_id: int):
     history_key = f"{HISTORY_KEY_PREFIX}{chat_id}"
@@ -321,6 +395,15 @@ def save_chat_data(chat_id: int):
             else:
                 pipe.delete(config_key)
 
+            users_key = f"{USER_KEY_PREFIX}{chat_id}"
+            if chat_id in user_profiles and user_profiles[chat_id]:
+                serialized_users = {
+                    str(uid): profile for uid, profile in user_profiles[chat_id].items()
+                }
+                pipe.set(users_key, json.dumps(serialized_users, ensure_ascii=False))
+            else:
+                pipe.delete(users_key)
+
             pipe.execute()
     except Exception as exc:
         log.error(f"Не удалось сохранить данные чата {chat_id} в Redis: {exc}", exc_info=True)
@@ -329,6 +412,40 @@ def save_chat_data(chat_id: int):
 async def persist_chat_data(chat_id: int):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, save_chat_data, chat_id)
+
+
+def record_user_profile(chat_id: int, user: Optional[User]) -> bool:
+    if not user:
+        return False
+
+    profile: Dict[str, Any] = {
+        "id": user.id,
+        "username": user.username or None,
+        "first_name": user.first_name or None,
+        "last_name": user.last_name or None,
+        "full_name": getattr(user, "full_name", None) or " ".join(filter(None, [user.first_name, user.last_name])) or None,
+        "language_code": user.language_code or None,
+        "is_bot": user.is_bot,
+        "updated_at": time.time(),
+    }
+
+    cleaned_profile = {key: value for key, value in profile.items() if value is not None}
+    chat_profiles = user_profiles.setdefault(chat_id, {})
+    existing = chat_profiles.get(user.id)
+
+    if existing != cleaned_profile:
+        chat_profiles[user.id] = cleaned_profile
+        return True
+    return False
+
+
+async def ensure_user_profile(update: Update):
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
+        return
+    if record_user_profile(chat.id, user):
+        await persist_chat_data(chat.id)
 
 # ---------- Вспомогалки ----------
 def get_cfg(chat_id: int) -> ChatConfig:
@@ -461,11 +578,13 @@ def split_long_message(text: str, max_length: int = 4096) -> List[str]:
 
 # ---------- Команды ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     await update.message.reply_text("👋 Я Сигмоида бот. /help – справка\n\n"
                                     "⚠️ <b>Важно:</b> Ваши сообщения и медиафайлы обрабатываются через Google Gemini API. /privacy",
                                     parse_mode=ParseMode.HTML)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     await update.message.reply_text("<b>Команды:</b>\n"
                                     "/settings – показать текущие настройки\n"
                                     "/autopost on|off – вкл/выкл автопосты (админ)\n"
@@ -478,14 +597,17 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     parse_mode=ParseMode.HTML)
 
 async def privacy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     await update.message.reply_text(PRIVACY_POLICY_TEXT, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     chat_id = update.effective_chat.id
     history.pop(chat_id, None)
     await persist_chat_data(chat_id)
     await update.message.reply_text("История очищена ✅")
 async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not update.message or not update.effective_chat or not update.effective_user: return
 
     chat_id = update.effective_chat.id
@@ -532,9 +654,12 @@ async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_id in configs:
             del configs[chat_id]
             log.info(f"Deleted configs for chat_id {chat_id}.")
+        if chat_id in user_profiles:
+            del user_profiles[chat_id]
+            log.info(f"Deleted user profiles for chat_id {chat_id}.")
 
         try:
-            redis_client.delete(f"{HISTORY_KEY_PREFIX}{chat_id}", f"{CONFIG_KEY_PREFIX}{chat_id}")
+            redis_client.delete(f"{HISTORY_KEY_PREFIX}{chat_id}", f"{CONFIG_KEY_PREFIX}{chat_id}", f"{USER_KEY_PREFIX}{chat_id}")
             log.info(f"Удалены ключи Redis для чата {chat_id}.")
         except Exception as exc:
             log.error(f"Не удалось удалить ключи Redis для чата {chat_id}: {exc}", exc_info=True)
@@ -544,14 +669,16 @@ async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Если вы продолжите использовать бота, начнется новая история."
         )
 async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not await is_admin(update, context): return
     if not context.args: return await update.message.reply_text("Укажите ID чата.")
     try:
         target_id = int(context.args[0])
         history.pop(target_id, None)
         configs.pop(target_id, None)
+        user_profiles.pop(target_id, None)
         try:
-            redis_client.delete(f"{HISTORY_KEY_PREFIX}{target_id}", f"{CONFIG_KEY_PREFIX}{target_id}")
+            redis_client.delete(f"{HISTORY_KEY_PREFIX}{target_id}", f"{CONFIG_KEY_PREFIX}{target_id}", f"{USER_KEY_PREFIX}{target_id}")
         except Exception as exc:
             log.error(f"Не удалось удалить данные чата {target_id} из Redis: {exc}", exc_info=True)
         await update.message.reply_text(f"Данные для ID {target_id} удалены.")
@@ -559,6 +686,7 @@ async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Неверный ID.")
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     cfg = get_cfg(update.effective_chat.id)
     await update.message.reply_text(f"<b>Автопосты:</b> {'вкл' if cfg.autopost_enabled else 'выкл'}.\n"
                                     f"<b>Интервал:</b> {cfg.interval} сек, <b>мин. сообщений:</b> {cfg.min_messages}.\n"
@@ -566,6 +694,7 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     parse_mode=ParseMode.HTML)
 
 async def autopost_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not await is_admin(update, context): return
     if not context.args or context.args[0] not in {"on", "off"}: return await update.message.reply_text("Пример: /autopost on")
     cfg = get_cfg(update.effective_chat.id)
@@ -574,6 +703,7 @@ async def autopost_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Автопосты {'включены' if cfg.autopost_enabled else 'выключены'}.")
 
 async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not await is_admin(update, context): return
     try:
         cfg = get_cfg(update.effective_chat.id)
@@ -584,6 +714,7 @@ async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пример: /set_interval 7200")
 
 async def set_minmsgs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not await is_admin(update, context): return
     try:
         cfg = get_cfg(update.effective_chat.id)
@@ -594,6 +725,7 @@ async def set_minmsgs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пример: /set_minmsgs 10")
 
 async def set_msgsize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not await is_admin(update, context): return
     size = (context.args or [""])[0].lower()
     if size not in {"small", "medium", "large", "s", "m", "l", ""}:
@@ -609,6 +741,7 @@ async def set_msgsize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Размер ответов = {cfg.msg_size or 'default'}.")
 
 async def draw_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
     if not context.args: return await update.message.reply_text("Пример: /draw кот в скафандре")
     await generate_and_send_image(update, context, ' '.join(context.args))
 
@@ -659,6 +792,7 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
     if not update.message: return
     chat_id = update.effective_chat.id
     text = update.message.text or update.message.caption or ""
+    record_user_profile(chat_id, update.effective_user)
     cfg = get_cfg(chat_id)
 
     if update.message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
@@ -685,17 +819,18 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
         file = await update.message.photo[-1].get_file()
         image_buffer = io.BytesIO()
         await file.download_to_memory(out=image_buffer)
-        image_buffer.seek(0)
-        prompt_parts.insert(0, Image.open(image_buffer))
+        file_bytes = image_buffer.getvalue()
+        mime_type = file.mime_type or "image/jpeg"
+        prompt_parts.insert(0, {"mime_type": mime_type, "data": file_bytes})
 
     if not prompt_parts: return
     await send_bot_response(update, context, chat_id, prompt_parts)
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message: return
-    
-    # Бот пока не умеет обрабатывать медиа (голосовые, видео, видео-кружочки)
-    # так как Gemini API не поддерживает аудио, а для видео нужна дополнительная настройка
+    await ensure_user_profile(update)
+
+    # Бот пока не умеет...
     await update.message.reply_text(
         "😔 Извините, я пока не умею обрабатывать голосовые сообщения, видео и видео-кружочки.\n\n"
         "Пожалуйста, опишите ваш вопрос текстом или отправьте фото — с ними я работаю отлично!"
