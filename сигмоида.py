@@ -53,7 +53,9 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
+def strip_html_tags(text: str) -> str:
+    clean = re.compile('<.?>')
+    return re.sub(clean, '', text)
 
 @flask_app.route('/')
 def home():
@@ -465,7 +467,9 @@ async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                     await update.message.reply_text(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
                 except BadRequest as e:
                     log.warning(f"HTML parse failed, sending plain text. Error: {e}")
-                    await update.message.reply_text(chunk, disable_web_page_preview=True)
+                    # Strip HTML tags before sending as plain text
+                    plain_text_chunk = strip_html_tags(chunk)
+                    await update.message.reply_text(plain_text_chunk, disable_web_page_preview=True)
     except Exception as e:
         log.exception(e)
         await update.message.reply_text("⚠️ Ошибка модели.")
