@@ -26,6 +26,12 @@ REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
     raise RuntimeError("Переменная окружения REDIS_URL должна быть установлена")
 
+# Upstash предоставляет URL redis://, но требует TLS-соединения.
+# Библиотека `redis-py` автоматически включает TLS, если схема `rediss://`.
+# Мы принудительно меняем схему для обеспечения безопасного соединения.
+if ".upstash.io" in REDIS_URL and REDIS_URL.startswith("redis://"):
+    REDIS_URL = "rediss" + REDIS_URL[len("redis"):]
+
 try:
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     redis_client.ping()
