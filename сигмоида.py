@@ -154,6 +154,34 @@ configs: Dict[int, ChatConfig] = {}
 history: Dict[int, List[ContentType]] = {}
 
 # ---------- Сохранение и загрузка данных ----------
+def convert_part_to_dict(part):
+    """Конвертирует Part объект в словарь."""
+    if hasattr(part, 'text'):
+        return {'text': part.text}
+    elif hasattr(part, 'inline_data'):
+        return {'inline_data': {'mime_type': part.inline_data.mime_type, 'data': part.inline_data.data}}
+    elif isinstance(part, dict):
+        return part
+    return str(part)
+
+def convert_history_to_dict(history_item):
+    """Конвертирует объекты Content из Gemini API в словари для JSON сериализации."""
+    if hasattr(history_item, 'role') and hasattr(history_item, 'parts'):
+        # Это объект Content из google.generativeai
+        return {
+            'role': history_item.role,
+            'parts': [convert_part_to_dict(part) for part in history_item.parts]
+        }
+    elif isinstance(history_item, dict):
+        # Уже словарь, но нужно проверить parts
+        if 'parts' in history_item:
+            return {
+                'role': history_item.get('role'),
+                'parts': [convert_part_to_dict(part) for part in history_item['parts']]
+            }
+        return history_item
+    return history_item
+
 def load_data():
     global history, configs
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -174,8 +202,13 @@ def save_data():
     log.info("Saving data...")
     os.makedirs(DATA_DIR, exist_ok=True)
     try:
+        # Конвертируем историю из объектов Content в словари для JSON сериализации
+        history_to_save = {
+            chat_id: [convert_history_to_dict(item) for item in chat_history]
+            for chat_id, chat_history in history.items()
+        }
         with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+            json.dump(history_to_save, f, ensure_ascii=False, indent=2)
         configs_to_save = {cid: asdict(cfg) for cid, cfg in configs.items()}
         with open(CONFIGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(configs_to_save, f, ensure_ascii=False, indent=2)
