@@ -5,7 +5,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple, Any
 from PIL import Image
 from telegram import Update, File
-from telegram.constants import ChatType, MessageEntityType, ParseMode
+from telegram.constants import ChatType, MessageEntityType, ParseMode, Chat, ChatMember
 from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder, ContextTypes,
@@ -17,6 +17,7 @@ from flask import Flask, render_template_string, request, abort, send_from_direc
 import threading
 import requests
 from dotenv import load_dotenv
+import base64
 
 load_dotenv()
 
@@ -157,11 +158,13 @@ history: Dict[int, List[ContentType]] = {}
 
 # ---------- Сохранение и загрузка данных ----------
 def convert_part_to_dict(part):
-    """Конвертирует Part объект в словарь."""
+    """Конвертирует Part объект в словарь для JSON сериализации."""
     if hasattr(part, 'text'):
         return {'text': part.text}
-    elif hasattr(part, 'inline_data'):
-        return {'inline_data': {'mime_type': part.inline_data.mime_type, 'data': part.inline_data.data}}
+    elif hasattr(part, 'inline_data') and hasattr(part.inline_data, 'mime_type') and hasattr(part.inline_data, 'data'):
+        # Кодируем бинарные данные изображения в base64 строку
+        encoded_data = base64.b64encode(part.inline_data.data).decode('utf-8')
+        return {'inline_data': {'mime_type': part.inline_data.mime_type, 'data': encoded_data}}
     elif isinstance(part, dict):
         return part
     return str(part)
@@ -189,16 +192,34 @@ def load_data():
     os.makedirs(DATA_DIR, exist_ok=True)
     try:
         with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            history = {int(k): v for k, v in json.load(f).items()}
+            loaded_history = json.load(f)
+            # При загрузке, декодируем Base64 и воссоздаем объекты PartType, если это inline_data
+            history = {
+                int(chat_id): [
+                    {
+                        'role': item['role'],
+                        'parts': [
+                            {
+                                'text': part['text']
+                            } if 'text' in part else (
+                                genai.types.Part(
+                                    inline_data=genai.types.Blob(
+                                        mime_type=part['inline_data']['mime_type'],
+                                        data=base64.b64decode(part['inline_data']['data'].encode('utf-8'))
+                                    )
+                                )
+                            )
+                            for part in item['parts']
+                        ]
+                    }
+                    for item in chat_history
+                ]
+                for chat_id, chat_history in loaded_history.items()
+            }
             log.info(f"Loaded {len(history)} chat histories.")
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        log.warning(f"History file not found or is invalid ({e}), starting fresh.")
         history = {}
-    try:
-        with open(CONFIGS_FILE, 'r', encoding='utf-8') as f:
-            configs = {int(k): ChatConfig(**v) for k, v in json.load(f).items()}
-            log.info(f"Loaded {len(configs)} chat configs.")
-    except (FileNotFoundError, json.JSONDecodeError):
-        configs = {}
 
 def save_data():
     log.info("Saving data...")
@@ -352,7 +373,7 @@ def split_long_message(text: str, max_length: int = 4096) -> List[str]:
 
 # ---------- Команды ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Я Gemini бот. /help – справка\n\n"
+    await update.message.reply_text("👋 Я Сигмоида бот. /help – справка\n\n"
                                     "⚠️ <b>Важно:</b> Ваши сообщения и медиафайлы обрабатываются через Google Gemini API. /privacy",
                                     parse_mode=ParseMode.HTML)
 
@@ -374,7 +395,62 @@ async def privacy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history.pop(update.effective_chat.id, None)
     await update.message.reply_text("История очищена ✅")
-    
+async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_chat or not update.effective_user: return
+
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    username = update.effective_user.username or update.effective_user.first_name
+    chat_type = update.effective_chat.type
+
+    # Получаем ADMIN_ID из переменных окружения
+    ADMIN_ID = os.getenv("ADMIN_ID")
+    is_bot_admin = (str(user_id) == ADMIN_ID) # Проверяем, является ли текущий пользователь главным админом бота
+
+    can_delete = False
+    if chat_type == Chat.PRIVATE:
+        can_delete = True # В личных чатах любой пользователь может удалить свои данные
+        log.info(f"User {username} ({user_id}) in private chat requested to delete their data.")
+    elif chat_type in [Chat.GROUP, Chat.SUPERGROUP]:
+        if is_bot_admin:
+            can_delete = True # Главный админ бота может удалять данные в группах
+            log.info(f"Bot admin {username} ({user_id}) in group chat ({chat_id}) requested to delete chat data.")
+        else:
+            try:
+                # Проверяем, является ли пользователь администратором группы
+                chat_member = await context.bot.get_chat_member(chat_id, user_id)
+                if chat_member.status in [ChatMember.ADMINISTRATOR, ChatMember.CREATOR]:
+                    can_delete = True
+                    log.info(f"Group admin {username} ({user_id}) in group chat ({chat_id}) requested to delete chat data.")
+                else:
+                    log.warning(f"User {username} ({user_id}) tried to delete data in group chat ({chat_id}) without admin rights.")
+                    await update.message.reply_html("<b>Эту команду могут использовать только администраторы группы.</b>")
+                    return
+            except Exception as e:
+                log.error(f"Error checking chat member status in group {chat_id}: {e}")
+                await update.message.reply_html("<b>Произошла ошибка при проверке ваших прав администратора.</b>")
+                return
+    else:
+        log.warning(f"User {username} ({user_id}) tried to delete data in unsupported chat type: {chat_type}.")
+        await update.message.reply_html("<b>Эта команда не поддерживается в данном типе чата.</b>")
+        return
+
+    if can_delete:
+        if chat_id in history:
+            del history[chat_id]
+            log.info(f"Deleted history for chat_id {chat_id}.")
+        if chat_id in configs:
+            del configs[chat_id]
+            log.info(f"Deleted configs for chat_id {chat_id}.")
+
+        # Сохраняем изменения немедленно
+        save_data()
+        log.info(f"Data for chat_id {chat_id} saved after deletion.")
+
+        await update.message.reply_html(
+            "<b>Все данные для этого чата (история переписки и настройки) были успешно удалены.</b>\n"
+            "Если вы продолжите использовать бота, начнется новая история."
+        )
 async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update, context): return
     if not context.args: return await update.message.reply_text("Укажите ID чата.")
@@ -508,18 +584,32 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message: return
-    media, prompt = None, ""
-    if update.message.voice: media, prompt = update.message.voice, "Расшифруй это голосовое сообщение:"
-    elif update.message.video: media, prompt = update.message.video, "Опиши, что происходит на этом видео:"
-    elif update.message.video_note: media, prompt = update.message.video_note, "Опиши это видео-сообщение:"
+    media = None
+    prompt = ""
+    media_mime_type = None # Добавляем переменную для сохранения mime_type
     
+    if update.message.voice:
+        media = update.message.voice
+        prompt = "Расшифруй это голосовое сообщение:"
+        media_mime_type = media.mime_type # Сохраняем mime_type
+    elif update.message.video:
+        media = update.message.video
+        prompt = "Опиши, что происходит на этом видео:"
+        media_mime_type = media.mime_type # Сохраняем mime_type
+    elif update.message.video_note:
+        media = update.message.video_note
+        prompt = "Опиши это видео-сообщение:"
+        media_mime_type = media.mime_type # Сохраняем mime_type
+        
     if not media: return
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     file = await media.get_file()
-    prompt_parts = [{"mime_type": file.mime_type, "data": await file.download_as_bytearray()}, {"text": prompt}]
+    file_bytes = await file.download_as_bytearray() # Скачиваем в байты
+    
+    # Используем сохраненный media_mime_type
+    prompt_parts = [{"mime_type": media_mime_type, "data": file_bytes}, {"text": prompt}]
     await send_bot_response(update, context, chat_id, prompt_parts)
-
 # ---------- Задачи ----------
 async def check_models_job(context: CallbackContext):
     await asyncio.get_running_loop().run_in_executor(None, check_available_models)
