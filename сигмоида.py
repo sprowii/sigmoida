@@ -683,7 +683,7 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
     if text: prompt_parts.append(answer_size_prompt(cfg.msg_size) + text)
     if update.message.photo:
         file = await update.message.photo[-1].get_file()
-        file_bytes = await file.download_as_bytearray()
+        file_bytes = await file.download_to_memory()
         prompt_parts.insert(0, Image.open(io.BytesIO(file_bytes)))
 
     if not prompt_parts: return
@@ -712,7 +712,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     file = await media.get_file()
-    file_bytes = await file.download_as_bytearray() # Скачиваем в байты
+    file_bytes = await file.download_to_memory() # Скачиваем в байты
     
     # Используем сохраненный media_mime_type
     prompt_parts = [{"mime_type": media_mime_type, "data": file_bytes}, {"text": prompt}]
