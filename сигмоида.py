@@ -161,6 +161,7 @@ MODELS = [
     "gemini-2.5-flash-lite-preview",
 ]
 MAX_HISTORY = 10
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB предел на сохранение изображений
 current_key_idx = 0
 current_model_idx = 0
 available_models: List[str] = MODELS.copy()
@@ -817,11 +818,21 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
     if text: prompt_parts.append(answer_size_prompt(cfg.msg_size) + text)
     if update.message.photo:
         photo_size = update.message.photo[-1]
+        if photo_size.file_size and photo_size.file_size > MAX_IMAGE_BYTES:
+            await update.message.reply_text("⚠️ Изображение слишком большое. Принимаю файлы до 5 МБ.")
+            return
         file = await photo_size.get_file()
         image_buffer = io.BytesIO()
         await file.download_to_memory(out=image_buffer)
         file_bytes = image_buffer.getvalue()
+        if len(file_bytes) > MAX_IMAGE_BYTES:
+            await update.message.reply_text("⚠️ Изображение слишком большое. Принимаю файлы до 5 МБ.")
+            return
         mime_type = getattr(photo_size, "mime_type", None) or getattr(file, "mime_type", None) or "image/jpeg"
+        if not mime_type.lower().startswith("image/"):
+            log.warning(f"Отфильтрован файл с неподдерживаемым MIME типом: {mime_type}")
+            await update.message.reply_text("⚠️ Пока принимаю только изображения (image/*). Пожалуйста, отправьте картинку.")
+            return
         prompt_parts.insert(0, {"inline_data": {"mime_type": mime_type, "data": file_bytes}})
 
     if not prompt_parts: return
