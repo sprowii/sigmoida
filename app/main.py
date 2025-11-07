@@ -1,0 +1,93 @@
+﻿# Copyright (c) 2025 sprouee
+import threading
+from typing import Dict, Tuple
+
+import requests
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
+
+from app import config
+from app.bot import handlers
+from app.bot.jobs import autopost_job, check_models_job
+from app.logging_config import log
+from app.storage.redis_store import load_data
+from app.web.server import flask_app
+
+
+def _ensure_env() -> Tuple[str, str]:
+    if not config.TG_TOKEN or not config.ADMIN_ID:
+        raise RuntimeError("TG_TOKEN Рё ADMIN_ID РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ СѓСЃС‚Р°РЅРѕРІР»РµРЅС‹")
+    if not config.DOWNLOAD_KEY:
+        log.warning("DOWNLOAD_KEY не установлен. Скачивание истории через веб будет недоступно.")
+    if not config.WEBAPP_BASE_URL:
+        log.warning("WEBAPP_BASE_URL не установлен. Ссылки на игры работать не будут.")
+    return config.TG_TOKEN, config.ADMIN_ID
+
+
+def _fetch_bot_info(token: str) -> Dict:
+    try:
+        bot_info = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10).json().get("result", {})
+        if not bot_info.get("username"):
+            raise RuntimeError("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ username Р±РѕС‚Р°.")
+        log.info(f"Bot Username: @{bot_info['username']}")
+        return bot_info
+    except Exception as exc:
+        raise RuntimeError(f"РћС€РёР±РєР° РїСЂРё РїРѕР»СѓС‡РµРЅРёРё РёРЅС„РѕСЂРјР°С†РёРё Рѕ Р±РѕС‚Рµ: {exc}")
+
+
+def build_application(token: str, bot_username: str):
+    app = ApplicationBuilder().token(token).build()
+    command_handlers = {
+        "start": handlers.start,
+        "help": handlers.help_cmd,
+        "privacy": handlers.privacy_cmd,
+        "reset": handlers.reset,
+        "draw": handlers.draw_image_cmd,
+        "game": handlers.game_cmd,
+        "settings": handlers.settings_cmd,
+        "delete_data": handlers.delete_data,
+        "autopost": handlers.autopost_switch,
+        "set_interval": handlers.set_interval,
+        "set_minmsgs": handlers.set_minmsgs,
+        "set_msgsize": handlers.set_msgsize,
+    }
+    for command, callback in command_handlers.items():
+        app.add_handler(CommandHandler(command, callback))
+        app.add_handler(CommandHandler(f"{command}_{bot_username}", callback))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_text_and_photo))
+    app.add_handler(MessageHandler(filters.PHOTO, handlers.handle_text_and_photo))
+    app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handlers.handle_media))
+
+    if app.job_queue:
+        app.job_queue.run_repeating(check_models_job, 14400, 60)
+        app.job_queue.run_repeating(autopost_job, 60, 60)
+        log.info("JobQueue initialized")
+
+    return app
+
+
+def main():
+    load_data()
+    token, _ = _ensure_env()
+    bot_info = _fetch_bot_info(token)
+    app = build_application(token, bot_info["username"])
+
+    threading.Thread(
+        target=lambda: flask_app.run(host=config.FLASK_HOST, port=config.FLASK_PORT),
+        daemon=True,
+    ).start()
+    log.info("Flask app started")
+    log.info("Bot started рџљЂ")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
+
+

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Сигмоида: игровая песочница</title>
+    <meta name="description" content="Песочница для запуска игр, сгенерированных нейросетью Сигмоида." />
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js" integrity="sha384-keyU75zJOsPm3rdYk+GzXgy9l+AKNv5Dx4u3PX/8Crxb4IX8jgceiFw9IDOB3kOj" crossorigin="anonymous"></script>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-family: "Inter", "Segoe UI", sans-serif;
+            height: 100%;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        header {
+            padding: 16px;
+            text-align: center;
+            background: rgba(30, 41, 59, 0.85);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+            backdrop-filter: blur(12px);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            letter-spacing: 0.05em;
+        }
+
+        header small {
+            color: rgba(226, 232, 240, 0.7);
+        }
+
+        #status {
+            padding: 12px 16px;
+            text-align: center;
+            background: rgba(148, 163, 184, 0.12);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+            font-size: 0.95rem;
+        }
+
+        #game-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        #game-container canvas {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        footer {
+            padding: 12px 16px;
+            text-align: center;
+            background: rgba(30, 41, 59, 0.85);
+            border-top: 1px solid rgba(148, 163, 184, 0.2);
+            font-size: 0.85rem;
+        }
+
+        .error {
+            color: #f87171;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Сигмоида · Игровая песочница</h1>
+        <small>Игры генерируются на лету. Всё, что вы видите — плод фантазии нейросети и пользователя.</small>
+    </header>
+    <div id="status">Загружаем игру...</div>
+    <main id="game-container"></main>
+    <footer>
+        Если игра не запускается, обновите страницу или сообщите о проблеме через кнопку «Пожаловаться» в боте.
+    </footer>
+    <script src="/webapp/sandbox.js" type="module"></script>
+</body>
+</html>
