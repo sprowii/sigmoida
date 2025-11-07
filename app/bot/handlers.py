@@ -4,13 +4,10 @@ import html
 import io
 from typing import List, Optional
 
-from telegram import ChatMember, Update
+from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ChatAction, ChatType, MessageEntityType, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
-from telegram.inline.inlinekeyboardbutton import InlineKeyboardButton
-from telegram.inline.inlinekeyboardmarkup import InlineKeyboardMarkup
-from telegram.webapps import WebAppInfo
 
 from app import config
 from app.llm.client import llm_generate_image, llm_request
