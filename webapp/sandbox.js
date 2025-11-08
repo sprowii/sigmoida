@@ -1,6 +1,8 @@
 const statusElement = document.getElementById("status");
 const containerElement = document.getElementById("game-container");
 
+let cachedPhaser = null;
+
 const GAME_ID_PARAM_NAMES = ["game_id", "gameId", "id"];
 const FORBIDDEN_PATTERNS = [
     { pattern: /document\.(cookie|write|location)/i, reason: "доступ к document.cookie/document.write" },
@@ -68,15 +70,32 @@ function createSandboxEnvironment() {
     };
 }
 
-function getPhaserInstance() {
-    const phaser = window.Phaser;
-    if (!phaser) {
-        throw new Error("Библиотека Phaser не загружена.");
+async function getPhaserInstance() {
+    if (cachedPhaser) {
+        return cachedPhaser;
     }
-    return phaser;
+    if (window.Phaser) {
+        cachedPhaser = window.Phaser;
+        return cachedPhaser;
+    }
+    return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            reject(new Error("Библиотека Phaser не загрузилась."));
+        }, 8000);
+        const check = () => {
+            if (window.Phaser) {
+                clearTimeout(timeoutId);
+                cachedPhaser = window.Phaser;
+                resolve(cachedPhaser);
+            } else {
+                requestAnimationFrame(check);
+            }
+        };
+        check();
+    });
 }
 
-function wrapAndExecute(code, sandbox) {
+async function wrapAndExecute(code, sandbox) {
     const wrapped = `(async function(Phaser, sandbox) {\n"use strict";\n${code}\n})`;
     let executable;
     try {
@@ -86,7 +105,7 @@ function wrapAndExecute(code, sandbox) {
         throw new Error("Игра содержит синтаксическую ошибку.");
     }
 
-    const phaser = getPhaserInstance();
+    const phaser = await getPhaserInstance();
 
     try {
         const result = executable(phaser, sandbox);
@@ -173,7 +192,7 @@ async function bootstrap() {
     const sandbox = createSandboxEnvironment();
 
     try {
-        wrapAndExecute(code, sandbox);
+        await wrapAndExecute(code, sandbox);
         sandbox.clearStatus();
         if (summary) {
             console.info("Описание игры:", summary);
