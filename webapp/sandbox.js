@@ -96,7 +96,7 @@ async function getPhaserInstance() {
 }
 
 async function wrapAndExecute(code, sandbox) {
-    const wrapped = `(async function(Phaser, sandbox) {\n"use strict";\n${code}\n})`;
+    const wrapped = `return (async function(Phaser, sandbox) {\n"use strict";\n${code}\n})(Phaser, sandbox);`;
     let executable;
     try {
         executable = window.Function("Phaser", "sandbox", wrapped);
