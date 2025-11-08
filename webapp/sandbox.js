@@ -68,6 +68,14 @@ function createSandboxEnvironment() {
     };
 }
 
+function getPhaserInstance() {
+    const phaser = window.Phaser;
+    if (!phaser) {
+        throw new Error("Библиотека Phaser не загружена.");
+    }
+    return phaser;
+}
+
 function wrapAndExecute(code, sandbox) {
     const wrapped = `(async function(Phaser, sandbox) {\n"use strict";\n${code}\n})`;
     let executable;
@@ -78,9 +86,11 @@ function wrapAndExecute(code, sandbox) {
         throw new Error("Игра содержит синтаксическую ошибку.");
     }
 
+    const phaser = getPhaserInstance();
+
     try {
-        const result = executable(Phaser, sandbox);
-        const maybePromise = normalizeExecutionResult(result, sandbox);
+        const result = executable(phaser, sandbox);
+        const maybePromise = normalizeExecutionResult(result, sandbox, phaser);
         if (maybePromise && typeof maybePromise.then === "function") {
             maybePromise.catch((error) => {
                 console.error("Асинхронная ошибка игры", error);
@@ -93,10 +103,10 @@ function wrapAndExecute(code, sandbox) {
     }
 }
 
-function normalizeExecutionResult(result, sandbox) {
+function normalizeExecutionResult(result, sandbox, phaser) {
     if (typeof result === "function") {
         try {
-            const nestedResult = result(Phaser, sandbox);
+            const nestedResult = result(phaser, sandbox);
             return nestedResult;
         } catch (error) {
             console.error("Ошибка при запуске возвращённой функции", error);
