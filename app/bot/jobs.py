@@ -25,7 +25,7 @@ async def autopost_job(context: CallbackContext):
             and time.time() - cfg.last_post_ts > cfg.interval
         ):
             continue
-        prompt = f"РЎРґРµР»Р°Р№ РєСЂР°С‚РєРёР№ РґР°Р№РґР¶РµСЃС‚ РїРѕСЃР»РµРґРЅРёС… {cfg.new_msg_counter} СЃРѕРѕР±С‰РµРЅРёР№ С‡Р°С‚Р°. Р’С‹РґРµР»Рё РѕСЃРЅРѕРІРЅС‹Рµ С‚РµРјС‹."
+        prompt = f"Сделай краткий дайджест последних {cfg.new_msg_counter} сообщений чата. Выдели основные темы."
         log.info(f"Autopost in chat {chat_id}")
         try:
             summary, model_used, _ = await asyncio.get_running_loop().run_in_executor(
@@ -33,7 +33,7 @@ async def autopost_job(context: CallbackContext):
             )
             if summary:
                 model_display = model_used.replace("gemini-", "").replace("-latest", "").title()
-                message_text = f"рџ“° <b>РђРІС‚РѕРґР°Р№РґР¶РµСЃС‚ ({model_display}):</b>\n{summary}"
+                message_text = f"📰 <b>Автодайджест ({model_display}):</b>\n{summary}"
                 for chunk in split_long_message(message_text):
                     try:
                         await context.bot.send_message(chat_id, chunk, parse_mode=ParseMode.HTML)

@@ -10,9 +10,9 @@ def strip_html_tags(text: str) -> str:
 
 def answer_size_prompt(size: str) -> str:
     return {
-        "small": "РљСЂР°С‚РєРѕ:",
-        "medium": "РћС‚РІРµС‚СЊ СЂР°Р·РІРµСЂРЅСѓС‚Рѕ:",
-        "large": "РћС‚РІРµС‚СЊ РјР°РєСЃРёРјР°Р»СЊРЅРѕ РїРѕРґСЂРѕР±РЅРѕ:",
+        "small": "Кратко:",
+        "medium": "Ответь развёрнуто:",
+        "large": "Ответь максимально подробно:",
     }.get(size, "")
 
 

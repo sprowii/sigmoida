@@ -65,16 +65,68 @@ def _serialize_game(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_admin_id(raw_id: Any) -> bool:
+    if raw_id is None or not config.ADMIN_ID:
+        return False
+    try:
+        return str(raw_id) == str(config.ADMIN_ID)
+    except Exception:
+        return False
+
+
 def _current_user() -> Optional[Dict[str, Any]]:
     user = session.get("user")
     if not user:
         return None
+    user_id = user.get("user_id")
     return {
-        "id": user.get("user_id"),
+        "id": user_id,
         "username": user.get("username"),
         "name": user.get("display_name"),
         "chat_id": user.get("chat_id"),
+        "is_admin": _is_admin_id(user_id),
     }
+
+
+def _require_user() -> Dict[str, Any]:
+    user = _current_user()
+    if not user:
+        _abort_json(401, "Нужен код от бота, чтобы создавать и редактировать игры.", "auth_required")
+    return user
+
+
+def _abort_json(status_code: int, message: str, error_code: str) -> None:
+    response = jsonify({"error": error_code, "message": message})
+    response.status_code = status_code
+    abort(response)
+
+
+def _ensure_can_tweak(payload: Dict[str, Any], user: Dict[str, Any]) -> None:
+    if user.get("is_admin"):
+        return
+
+    author_id = payload.get("author_id")
+    if author_id is None:
+        _abort_json(
+            403,
+            "Эта игра была создана без привязки к автору, поэтому доработки через веб недоступны.",
+            "forbidden",
+        )
+
+    try:
+        author_id_int = int(author_id)
+    except (TypeError, ValueError):
+        _abort_json(403, "Не удалось определить автора игры.", "forbidden")
+        return
+
+    user_id = user.get("id")
+    try:
+        user_id_int = int(user_id) if user_id is not None else None
+    except (TypeError, ValueError):
+        user_id_int = None
+
+    if user_id_int is None or user_id_int != author_id_int:
+        _abort_json(403, "Только автор игры может просить доработку.", "forbidden")
 
 
 def _serialize_generated(game: GeneratedGame) -> Dict[str, Any]:
@@ -280,10 +332,11 @@ def list_games_api():
 
 @flask_app.route("/api/games", methods=["POST"])
 def create_game_api():
+    _require_user()
     data = request.get_json(silent=True) or {}
     idea = (data.get("idea") or "").strip()
     if len(idea) < 4:
-        abort(400, description="Опиши идею игры чуть подробнее.")
+        _abort_json(400, "Опиши идею игры чуть подробнее.", "invalid_request")
     context = _generation_context()
     try:
         generated = generate_game(
@@ -294,10 +347,10 @@ def create_game_api():
             author_name=context["author_name"],
         )
     except ValueError as exc:
-        abort(400, description=str(exc))
+        _abort_json(400, str(exc), "invalid_request")
     except Exception as exc:
         log.error("Не удалось сгенерировать игру через веб: %s", exc, exc_info=True)
-        abort(500, description="Ошибка генерации игры. Попробуйте позже.")
+        _abort_json(500, "Ошибка генерации игры. Попробуйте позже.", "server_error")
 
     return jsonify({"game": _serialize_generated(generated)}), 201
 
@@ -307,8 +360,12 @@ def tweak_game_api(game_id: str):
     payload = load_game_payload(game_id)
     if not payload:
         abort(404)
+    user = _require_user()
+    _ensure_can_tweak(payload, user)
     data = request.get_json(silent=True) or {}
     instructions = (data.get("instructions") or "").strip()
+    if len(instructions) < 4:
+        _abort_json(400, "Опиши, что нужно изменить хотя бы в нескольких словах.", "invalid_request")
     context = _generation_context()
     try:
         generated = tweak_game(
@@ -320,9 +377,9 @@ def tweak_game_api(game_id: str):
             author_name=context["author_name"],
         )
     except ValueError as exc:
-        abort(400, description=str(exc))
+        _abort_json(400, str(exc), "invalid_request")
     except Exception as exc:
         log.error("Не удалось обновить игру %s: %s", game_id, exc, exc_info=True)
-        abort(500, description="Ошибка обновления игры. Попробуйте позже.")
+        _abort_json(500, "Ошибка обновления игры. Попробуйте позже.", "server_error")
 
     return jsonify({"game": _serialize_generated(generated)}), 201

@@ -14,16 +14,29 @@ const FORBIDDEN_PATTERNS = [
     { pattern: /<script/i, reason: "вставка <script> запрещена" },
 ];
 
-function setStatus(message, isError = false) {
+function setStatus(message, secondArg = false) {
     if (!statusElement) {
         return;
     }
+    let isError = false;
+    let loading = false;
+    if (typeof secondArg === "object" && secondArg !== null) {
+        isError = Boolean(secondArg.error);
+        loading = Boolean(secondArg.loading);
+    } else {
+        isError = Boolean(secondArg);
+    }
     statusElement.textContent = message;
     statusElement.classList.toggle("error", isError);
+    statusElement.classList.toggle("loading", loading);
 }
 
 function clearStatus() {
-    setStatus("", false);
+    if (!statusElement) {
+        return;
+    }
+    statusElement.textContent = "";
+    statusElement.classList.remove("error", "loading");
 }
 
 function getGameId() {
@@ -127,7 +140,7 @@ async function wrapAndExecute(code, sandbox) {
 
     const phaser = await getPhaserInstance();
     sandbox.version = phaser.VERSION;
-    sandbox.setStatus(`Phaser v${phaser.VERSION}: запуск игры...`);
+    sandbox.setStatus(`Phaser v${phaser.VERSION}: запуск игры...`, { loading: true });
 
     try {
         const result = executable(phaser, sandbox);
@@ -183,7 +196,7 @@ async function bootstrap() {
         return;
     }
 
-    setStatus("Загружаем игру...");
+    setStatus("Загружаем игру...", { loading: true });
 
     let payload;
     try {
@@ -196,7 +209,7 @@ async function bootstrap() {
 
     const { title, summary, code } = payload;
     if (title) {
-        setStatus(`Игра: ${title}`);
+        setStatus(`Игра: ${title}`, { loading: true });
     }
 
     if (typeof code !== "string" || code.trim().length === 0) {

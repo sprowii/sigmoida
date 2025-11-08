@@ -21,7 +21,7 @@ from app.web.server import flask_app
 
 def _ensure_env() -> Tuple[str, str]:
     if not config.TG_TOKEN or not config.ADMIN_ID:
-        raise RuntimeError("TG_TOKEN Рё ADMIN_ID РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ СѓСЃС‚Р°РЅРѕРІР»РµРЅС‹")
+        raise RuntimeError("TG_TOKEN и ADMIN_ID должны быть установлены")
     if not config.DOWNLOAD_KEY:
         log.warning("DOWNLOAD_KEY не установлен. Скачивание истории через веб будет недоступно.")
     if not config.WEBAPP_BASE_URL:
@@ -33,11 +33,11 @@ def _fetch_bot_info(token: str) -> Dict:
     try:
         bot_info = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10).json().get("result", {})
         if not bot_info.get("username"):
-            raise RuntimeError("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ username Р±РѕС‚Р°.")
+            raise RuntimeError("Не удалось получить username бота.")
         log.info(f"Bot Username: @{bot_info['username']}")
         return bot_info
     except Exception as exc:
-        raise RuntimeError(f"РћС€РёР±РєР° РїСЂРё РїРѕР»СѓС‡РµРЅРёРё РёРЅС„РѕСЂРјР°С†РёРё Рѕ Р±РѕС‚Рµ: {exc}")
+        raise RuntimeError(f"Ошибка при получении информации о боте: {exc}")
 
 
 def build_application(token: str, bot_username: str):

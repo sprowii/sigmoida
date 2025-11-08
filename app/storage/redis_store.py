@@ -30,7 +30,7 @@ redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 try:
     redis_client.ping()
 except Exception as exc:
-    raise RuntimeError("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє Redis") from exc
+    raise RuntimeError("Не удалось подключиться к Redis") from exc
 
 
 def convert_part_to_dict(part: PartType):
@@ -94,7 +94,7 @@ def _deserialize_part(part: Any):
                     }
                 }
             except Exception as exc:
-                log.warning(f"РќРµ СѓРґР°Р»РѕСЃСЊ РґРµСЃРµСЂРёР°Р»РёР·РѕРІР°С‚СЊ С‡Р°СЃС‚СЊ РёСЃС‚РѕСЂРёРё: {exc}")
+                log.warning(f"Не удалось десериализовать часть истории: {exc}")
                 return {"inline_data": inline_data}
         if part.get("mime_type") and part.get("data"):
             try:
@@ -105,13 +105,13 @@ def _deserialize_part(part: Any):
                     }
                 }
             except Exception as exc:
-                log.warning(f"РќРµ СѓРґР°Р»РѕСЃСЊ РґРµСЃРµСЂРёР°Р»РёР·РѕРІР°С‚СЊ С‡Р°СЃС‚СЊ РёСЃС‚РѕСЂРёРё (РїР»РѕСЃРєР°СЏ Р·Р°РїРёСЃСЊ): {exc}")
+                log.warning(f"Не удалось десериализовать часть истории (плоская запись): {exc}")
                 return {"inline_data": part}
     return part
 
 
 def load_data():
-    log.info("Р—Р°РіСЂСѓР·РєР° РґР°РЅРЅС‹С… РёР· Redis...")
+    log.info("Загрузка данных из Redis...")
     try:
         loaded_history: Dict[int, List[ContentType]] = {}
         for key in redis_client.scan_iter(match=f"{HISTORY_KEY_PREFIX}*"):
@@ -122,12 +122,12 @@ def load_data():
             try:
                 chat_history = json.loads(raw_value)
             except json.JSONDecodeError as exc:
-                log.warning(f"РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON РёСЃС‚РѕСЂРёРё РґР»СЏ С‡Р°С‚Р° {chat_id_part}: {exc}")
+                log.warning(f"Некорректный JSON истории для чата {chat_id_part}: {exc}")
                 continue
             try:
                 chat_id = int(chat_id_part)
             except ValueError:
-                log.warning(f"РџСЂРѕРїСѓСЃРєР°РµРј РёСЃС‚РѕСЂРёСЋ СЃ РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Рј chat_id: {chat_id_part}")
+                log.warning(f"Пропускаем историю с некорректным chat_id: {chat_id_part}")
                 continue
             loaded_history[chat_id] = [
                 {
@@ -138,9 +138,9 @@ def load_data():
             ]
         history.clear()
         history.update(loaded_history)
-        log.info(f"Р—Р°РіСЂСѓР¶РµРЅРѕ {len(history)} РёСЃС‚РѕСЂРёР№ С‡Р°С‚РѕРІ РёР· Redis.")
+        log.info(f"Загружено {len(history)} историй чатов из Redis.")
     except Exception as exc:
-        log.error(f"РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ РёСЃС‚РѕСЂРёР№ РёР· Redis: {exc}", exc_info=True)
+        log.error(f"Ошибка при загрузке историй из Redis: {exc}", exc_info=True)
         history.clear()
 
     try:
@@ -153,22 +153,22 @@ def load_data():
             try:
                 config_payload = json.loads(raw_value)
             except json.JSONDecodeError as exc:
-                log.warning(f"РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON РєРѕРЅС„РёРіСѓСЂР°С†РёРё РґР»СЏ С‡Р°С‚Р° {chat_id_part}: {exc}")
+                log.warning(f"Некорректный JSON конфигурации для чата {chat_id_part}: {exc}")
                 continue
             try:
                 chat_id = int(chat_id_part)
             except ValueError:
-                log.warning(f"РџСЂРѕРїСѓСЃРєР°РµРј РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ СЃ РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Рј chat_id: {chat_id_part}")
+                log.warning(f"Пропускаем конфигурацию с некорректным chat_id: {chat_id_part}")
                 continue
             try:
                 loaded_configs[chat_id] = ChatConfig(**config_payload)
             except TypeError as exc:
-                log.warning(f"РќРµРєРѕСЂСЂРµРєС‚РЅС‹Рµ РґР°РЅРЅС‹Рµ РєРѕРЅС„РёРіСѓСЂР°С†РёРё РґР»СЏ С‡Р°С‚Р° {chat_id}: {exc}")
+                log.warning(f"Некорректные данные конфигурации для чата {chat_id}: {exc}")
         configs.clear()
         configs.update(loaded_configs)
-        log.info(f"Р—Р°РіСЂСѓР¶РµРЅРѕ {len(configs)} РєРѕРЅС„РёРіСѓСЂР°С†РёР№ С‡Р°С‚РѕРІ РёР· Redis.")
+        log.info(f"Загружено {len(configs)} конфигураций чатов из Redis.")
     except Exception as exc:
-        log.error(f"РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ РєРѕРЅС„РёРіСѓСЂР°С†РёР№ РёР· Redis: {exc}", exc_info=True)
+        log.error(f"Ошибка при загрузке конфигураций из Redis: {exc}", exc_info=True)
         configs.clear()
 
     try:
@@ -181,12 +181,12 @@ def load_data():
             try:
                 users_payload = json.loads(raw_value)
             except json.JSONDecodeError as exc:
-                log.warning(f"РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON РїСЂРѕС„РёР»РµР№ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РґР»СЏ С‡Р°С‚Р° {chat_id_part}: {exc}")
+                log.warning(f"Некорректный JSON профилей пользователей для чата {chat_id_part}: {exc}")
                 continue
             try:
                 chat_id = int(chat_id_part)
             except ValueError:
-                log.warning(f"РџСЂРѕРїСѓСЃРєР°РµРј РїСЂРѕС„РёР»Рё СЃ РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Рј chat_id: {chat_id_part}")
+                log.warning(f"Пропускаем профили с некорректным chat_id: {chat_id_part}")
                 continue
             try:
                 loaded_users[chat_id] = {
@@ -195,12 +195,12 @@ def load_data():
                     if isinstance(profile, dict)
                 }
             except Exception as exc:
-                log.warning(f"РќРµРєРѕСЂСЂРµРєС‚РЅС‹Рµ РґР°РЅРЅС‹Рµ РїСЂРѕС„РёР»РµР№ РґР»СЏ С‡Р°С‚Р° {chat_id}: {exc}")
+                log.warning(f"Некорректные данные профилей для чата {chat_id}: {exc}")
         user_profiles.clear()
         user_profiles.update(loaded_users)
-        log.info(f"Р—Р°РіСЂСѓР¶РµРЅРѕ РїСЂРѕС„РёР»РµР№ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РґР»СЏ {len(user_profiles)} С‡Р°С‚РѕРІ РёР· Redis.")
+        log.info(f"Загружено профилей пользователей для {len(user_profiles)} чатов из Redis.")
     except Exception as exc:
-        log.error(f"РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ РїСЂРѕС„РёР»РµР№ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РёР· Redis: {exc}", exc_info=True)
+        log.error(f"Ошибка при загрузке профилей пользователей из Redis: {exc}", exc_info=True)
         user_profiles.clear()
 
 
@@ -230,7 +230,7 @@ def save_chat_data(chat_id: int):
 
             pipe.execute()
     except Exception as exc:
-        log.error(f"РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РґР°РЅРЅС‹Рµ С‡Р°С‚Р° {chat_id} РІ Redis: {exc}", exc_info=True)
+        log.error(f"Не удалось сохранить данные чата {chat_id} в Redis: {exc}", exc_info=True)
 
 
 async def persist_chat_data(chat_id: int):

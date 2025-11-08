@@ -9,6 +9,17 @@ const state = {
     currentTweakGameId: null,
 };
 
+const PROGRESS_PHRASES = [
+    "🧠 Продумываем механику уровня...",
+    "🎨 Добавляем спрайты и фон...",
+    "🎵 Подключаем эффекты и звук...",
+    "🕹️ Настраиваем управление и физику...",
+    "🧪 Проверяем синтаксис и безопасность...",
+];
+
+let progressIntervalId = null;
+let progressStep = 0;
+
 const decodeCodes = (codes) => String.fromCharCode(...codes);
 
 const routes = {
@@ -42,6 +53,34 @@ const elements = {
     tweakTitle: document.getElementById("tweak-title"),
     gameTemplate: document.getElementById("game-card-template"),
 };
+
+async function extractErrorMessage(response, fallback = "Произошла ошибка") {
+    const contentType = response.headers.get("Content-Type") || "";
+    if (contentType.includes("application/json")) {
+        try {
+            const data = await response.json();
+            if (data?.message) {
+                return data.message;
+            }
+            if (data?.description) {
+                return data.description;
+            }
+            if (data?.error) {
+                return data.error;
+            }
+        } catch (error) {
+            console.debug("error parsing json payload", error);
+        }
+        return fallback;
+    }
+    try {
+        const text = await response.text();
+        return text || fallback;
+    } catch (error) {
+        console.debug("error reading response body", error);
+        return fallback;
+    }
+}
 
 function formatDate(timestamp) {
     if (!timestamp) {
@@ -107,19 +146,60 @@ function setLoading(loading) {
     }
 }
 
+function startGeneratorProgress(initialMessage = PROGRESS_PHRASES[0]) {
+    stopGeneratorProgress();
+    if (!elements.generatorStatus) {
+        return;
+    }
+    elements.generatorStatus.classList.remove("error", "success");
+    elements.generatorStatus.classList.add("loading");
+    elements.generatorStatus.innerHTML = initialMessage;
+    const startIndex = PROGRESS_PHRASES.indexOf(initialMessage);
+    progressStep = startIndex >= 0 ? startIndex : -1;
+    progressIntervalId = window.setInterval(() => {
+        if (!elements.generatorStatus) {
+            return;
+        }
+        progressStep = (progressStep + 1) % PROGRESS_PHRASES.length;
+        elements.generatorStatus.innerHTML = PROGRESS_PHRASES[progressStep];
+    }, 2200);
+}
+
+function stopGeneratorProgress() {
+    if (progressIntervalId) {
+        window.clearInterval(progressIntervalId);
+        progressIntervalId = null;
+    }
+    if (elements.generatorStatus) {
+        elements.generatorStatus.classList.remove("loading");
+    }
+}
+
 function setGenerating(isGenerating, message = "", variant = "info") {
     state.generating = isGenerating;
     if (elements.generatorSubmit) {
         elements.generatorSubmit.disabled = isGenerating;
     }
-    if (elements.generatorStatus) {
+    if (!elements.generatorStatus) {
+        return;
+    }
+    if (isGenerating) {
+        const startingMessage = message || PROGRESS_PHRASES[0];
+        startGeneratorProgress(startingMessage);
+        return;
+    }
+
+    stopGeneratorProgress();
+    elements.generatorStatus.classList.remove("error", "success");
+    if (message) {
         elements.generatorStatus.innerHTML = message;
-        elements.generatorStatus.classList.remove("error", "success");
-        if (variant === "error") {
-            elements.generatorStatus.classList.add("error");
-        } else if (variant === "success") {
-            elements.generatorStatus.classList.add("success");
-        }
+    } else {
+        elements.generatorStatus.textContent = "";
+    }
+    if (variant === "error") {
+        elements.generatorStatus.classList.add("error");
+    } else if (variant === "success") {
+        elements.generatorStatus.classList.add("success");
     }
 }
 
@@ -151,6 +231,24 @@ function renderEmptyState(scope) {
         ? "Пока что здесь пусто. Сгенерируй игру через форму выше или попроси агента доработать существующую песочницу."
         : "Игры появятся в ближайшее время. Обнови страницу позже или создай новый проект прямо сейчас.";
     elements.gameList.append(article);
+}
+
+function canTweakGame(game) {
+    if (!state.user) {
+        return false;
+    }
+    if (state.user.is_admin) {
+        return true;
+    }
+    const authorId = game?.author?.id;
+    if (authorId === null || authorId === undefined) {
+        return false;
+    }
+    const userId = state.user.id;
+    if (userId === null || userId === undefined) {
+        return false;
+    }
+    return String(authorId) === String(userId);
 }
 
 function renderGames(games, reset = false) {
@@ -185,7 +283,20 @@ function renderGames(games, reset = false) {
         });
         const tweakBtn = clone.querySelector("button[data-tweak]");
         if (tweakBtn) {
-            tweakBtn.addEventListener("click", () => showTweakModal(game));
+            const userCanTweak = canTweakGame(game);
+            if (userCanTweak) {
+                tweakBtn.addEventListener("click", () => showTweakModal(game));
+            } else if (!state.user) {
+                tweakBtn.classList.add("locked");
+                tweakBtn.textContent = "Войти, чтобы доработать";
+                tweakBtn.title = "Войдите через код из бота, чтобы просить доработку.";
+                tweakBtn.addEventListener("click", showModal);
+            } else {
+                tweakBtn.classList.add("locked");
+                tweakBtn.disabled = true;
+                tweakBtn.textContent = "Только автор";
+                tweakBtn.title = "Только автор игры может запросить изменения.";
+            }
         }
         elements.gameList.append(clone);
     }
@@ -277,21 +388,29 @@ async function handleGeneratorSubmit(event) {
         setGenerating(false, "Напиши, во что будем играть.", "error");
         return;
     }
-    setGenerating(true, "Собираем сцену и ресурсы...");
+    setGenerating(true, PROGRESS_PHRASES[0]);
     try {
         const response = await fetch(routes.games, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ idea }),
+            credentials: "same-origin",
         });
         if (!response.ok) {
-            const text = await response.text();
-            throw new Error(text || "Ошибка генерации");
+            const fallback = response.status === 401
+                ? "Нужен код от бота, чтобы создавать игры."
+                : "Не удалось сгенерировать игру.";
+            const errorMessage = await extractErrorMessage(response, fallback);
+            setGenerating(false, errorMessage, "error");
+            if (response.status === 401) {
+                showModal();
+            }
+            return;
         }
         const data = await response.json();
         const game = data.game;
         elements.generatorTextarea.value = "";
-        const link = game && game.share_url ? `<a href=\"${game.share_url}\" target=\"_blank\" rel=\"noopener\">Открыть игру</a>` : "";
+        const link = game && game.share_url ? `<a href="${game.share_url}" target="_blank" rel="noopener">Открыть игру</a>` : "";
         setGenerating(false, `Готово! ${game?.title || "Новая игра"}. ${link}`, "success");
         await loadGames({ reset: true });
     } catch (error) {
@@ -322,11 +441,24 @@ async function handleTweakSubmit(event) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ instructions }),
+                credentials: "same-origin",
             },
         );
         if (!response.ok) {
-            const text = await response.text();
-            throw new Error(text || "Ошибка при изменении игры");
+            const fallback = response.status === 401
+                ? "Нужен код от бота, чтобы дорабатывать игры."
+                : response.status === 403
+                    ? "Только автор игры может просить доработку."
+                    : "Не удалось обновить игру.";
+            const errorMessage = await extractErrorMessage(response, fallback);
+            if (response.status === 401) {
+                hideTweakModal();
+                showModal();
+            } else {
+                elements.tweakError.textContent = errorMessage;
+                elements.tweakError.classList.remove("hidden");
+            }
+            return;
         }
         hideTweakModal();
         await loadGames({ reset: true });

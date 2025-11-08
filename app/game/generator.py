@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -79,6 +82,8 @@ TWEAK_PROMPT_TEMPLATE = (
 JSON_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 CODE_BLOCK_PATTERN = re.compile(r"```[a-zA-Z0-9]*\n|```")
 
+_NODE_CHECK_SUPPORTED: Optional[bool] = None
+
 
 @dataclass
 class GeneratedGame:
@@ -118,6 +123,80 @@ def _cleanup_code(code: str) -> str:
 
 def _escape_braces(text: str) -> str:
     return text.replace("{", "{{").replace("}", "}}").strip()
+
+
+def _is_node_available() -> bool:
+    global _NODE_CHECK_SUPPORTED
+    if _NODE_CHECK_SUPPORTED is not None:
+        return _NODE_CHECK_SUPPORTED
+    try:
+        subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5, check=False)
+    except FileNotFoundError:
+        log.warning("Node.js не найден, синтаксическая проверка игр отключена.")
+        _NODE_CHECK_SUPPORTED = False
+        return False
+    except Exception as exc:
+        log.warning("Не удалось выполнить проверку наличия Node.js: %s", exc)
+        _NODE_CHECK_SUPPORTED = False
+        return False
+    _NODE_CHECK_SUPPORTED = True
+    return True
+
+
+def _sanitize_js_error(raw_error: str) -> str:
+    lines = [line.strip() for line in (raw_error or "").splitlines() if line.strip()]
+    for line in lines:
+        if any(keyword in line for keyword in ("SyntaxError", "ReferenceError", "TypeError")):
+            return line
+    if lines:
+        return lines[-1]
+    return "Код игры содержит синтаксическую ошибку."
+
+
+def _validate_js_code(code: str) -> Optional[str]:
+    if not code or not code.strip():
+        return "Код игры пустой."
+    if not _is_node_available():
+        return None
+    tmp_path = None
+    result = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tmp_file:
+            tmp_file.write(code)
+            tmp_path = tmp_file.name
+        result = subprocess.run(
+            ["node", "--check", tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("Синтаксическая проверка игры превысила допустимое время.")
+        return "Проверка синтаксиса превысила лимит времени."
+    except Exception as exc:
+        log.error("Не удалось выполнить синтаксическую проверку игры: %s", exc, exc_info=True)
+        return None
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    if result and result.returncode != 0:
+        error_output = (result.stderr or result.stdout or "").strip()
+        sanitized = _sanitize_js_error(error_output)
+        log.warning("Синтаксическая проверка игры не пройдена: %s", sanitized or error_output)
+        return sanitized or "Код игры содержит синтаксическую ошибку."
+    return None
+
+
+def _ensure_code_is_valid(code: str) -> None:
+    validation_error = _validate_js_code(code)
+    if validation_error:
+        raise ValueError(
+            f"Код игры не прошёл синтаксическую проверку: {validation_error}. "
+            "Попробуйте уточнить запрос и повторить генерацию."
+        )
 
 
 def _build_prompt(idea: str) -> str:
@@ -169,6 +248,8 @@ def generate_game(
     code = _cleanup_code(parsed.get("code", ""))
     if not code:
         raise ValueError("Модель не вернула JavaScript-код игры.")
+
+    _ensure_code_is_valid(code)
 
     title = (parsed.get("title") or "Игра от Сигмоиды").strip()
     summary = (parsed.get("summary") or "").strip()
@@ -240,6 +321,8 @@ def tweak_game(
     code = _cleanup_code(parsed.get("code", ""))
     if not code:
         raise ValueError("Модель не вернула JavaScript-код игры.")
+
+    _ensure_code_is_valid(code)
 
     title = (parsed.get("title") or payload.get("title") or "Игра от Сигмоиды").strip()
     summary = (parsed.get("summary") or "").strip()
