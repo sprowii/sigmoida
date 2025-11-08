@@ -80,8 +80,9 @@ function wrapAndExecute(code, sandbox) {
 
     try {
         const result = executable(Phaser, sandbox);
-        if (result && typeof result.then === "function") {
-            result.catch((error) => {
+        const maybePromise = normalizeExecutionResult(result, sandbox);
+        if (maybePromise && typeof maybePromise.then === "function") {
+            maybePromise.catch((error) => {
                 console.error("Асинхронная ошибка игры", error);
                 setStatus("Игра завершилась с ошибкой.", true);
             });
@@ -90,6 +91,19 @@ function wrapAndExecute(code, sandbox) {
         console.error("Игра завершилась с ошибкой", runtimeError);
         throw new Error(runtimeError?.message || "Игра завершилась с ошибкой.");
     }
+}
+
+function normalizeExecutionResult(result, sandbox) {
+    if (typeof result === "function") {
+        try {
+            const nestedResult = result(Phaser, sandbox);
+            return nestedResult;
+        } catch (error) {
+            console.error("Ошибка при запуске возвращённой функции", error);
+            throw error;
+        }
+    }
+    return result;
 }
 
 async function fetchGamePayload(gameId) {
@@ -164,5 +178,6 @@ async function bootstrap() {
 
 bootstrap().catch((fatalError) => {
     console.error("Критическая ошибка", fatalError);
-    setStatus("Критическая ошибка при запуске игры.", true);
+    const message = fatalError && fatalError.message ? `Критическая ошибка: ${fatalError.message}` : "Критическая ошибка при запуске игры.";
+    setStatus(message, true);
 });
