@@ -26,11 +26,15 @@ from app.config import (
     POLLINATIONS_HEIGHT,
     POLLINATIONS_MODEL,
     POLLINATIONS_SEED,
+    POLLINATIONS_TEXT_BASE_URL,
+    POLLINATIONS_TEXT_DEFAULT,
+    POLLINATIONS_TEXT_MODELS,
+    POLLINATIONS_TEXT_TIMEOUT,
     POLLINATIONS_TIMEOUT,
     POLLINATIONS_WIDTH,
 )
 from app.logging_config import log
-from app.state import history
+from app.state import configs, history
 
 current_key_idx = 0
 current_model_idx = 0
@@ -56,21 +60,52 @@ def _get_client(idx: int) -> genai.Client:
     return client
 
 
-def _provider_sequence() -> List[str]:
-    preferred = [provider for provider in LLM_PROVIDER_ORDER if provider in {"gemini", "openrouter"}]
-    if not preferred:
-        preferred = ["gemini", "openrouter"]
+def _normalize_provider_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"", "auto", "default"}:
+        return None
+    if normalized == "gemini":
+        return "gemini" if API_KEYS else None
+    if normalized == "openrouter":
+        return "openrouter" if OPENROUTER_API_KEYS and OPENROUTER_MODELS else None
+    if normalized == "pollinations":
+        return "pollinations" if POLLINATIONS_TEXT_MODELS else None
+    return None
+
+
+def _provider_sequence(preferred: Optional[str] = None) -> List[str]:
+    normalized_preferred = _normalize_provider_name(preferred)
+    ordered_config = [
+        provider for provider in LLM_PROVIDER_ORDER if provider in {"gemini", "openrouter", "pollinations"}
+    ]
+    if not ordered_config:
+        ordered_config = ["gemini", "openrouter", "pollinations"]
+
+    if normalized_preferred:
+        ordered = [normalized_preferred] + [p for p in ordered_config if p != normalized_preferred]
+    else:
+        ordered = ordered_config
+
     sequence: List[str] = []
-    for provider in preferred:
-        if provider == "gemini" and API_KEYS and GEMINI_MODELS:
-            sequence.append("gemini")
-        if provider == "openrouter" and OPENROUTER_API_KEYS and OPENROUTER_MODELS:
-            sequence.append("openrouter")
+    for provider in ordered:
+        if provider == "gemini":
+            if API_KEYS and GEMINI_MODELS:
+                sequence.append("gemini")
+        elif provider == "openrouter":
+            if OPENROUTER_API_KEYS and OPENROUTER_MODELS:
+                sequence.append("openrouter")
+        elif provider == "pollinations":
+            if POLLINATIONS_TEXT_MODELS:
+                sequence.append("pollinations")
     if not sequence:
         if API_KEYS:
             sequence.append("gemini")
         if OPENROUTER_API_KEYS and OPENROUTER_MODELS:
             sequence.append("openrouter")
+        if POLLINATIONS_TEXT_MODELS:
+            sequence.append("pollinations")
     return sequence
 
 
@@ -89,6 +124,18 @@ def _message_has_inline_data(parts: List[Dict[str, Any]]) -> bool:
         if isinstance(part, dict) and ("inline_data" in part or "inlineData" in part):
             return True
     return False
+
+
+def _chat_provider_preference(chat_id: Optional[int], override: Optional[str] = None) -> Optional[str]:
+    candidate = _normalize_provider_name(override)
+    if candidate:
+        return candidate
+    if chat_id is None:
+        return None
+    cfg = configs.get(chat_id)
+    if cfg and getattr(cfg, "llm_provider", None):
+        return _normalize_provider_name(cfg.llm_provider)
+    return None
 
 
 def _can_use_openrouter_message(message: Dict[str, Any]) -> bool:
@@ -120,6 +167,18 @@ def _prepare_openrouter_messages(
     if user_text.strip():
         messages.append({"role": "user", "content": user_text})
     return messages
+
+
+def _pollinations_text_model_for_chat(chat_id: Optional[int]) -> str:
+    if not POLLINATIONS_TEXT_MODELS:
+        return "openai"
+    if chat_id is not None:
+        cfg = configs.get(chat_id)
+        if cfg and getattr(cfg, "pollinations_text_model", None) in POLLINATIONS_TEXT_MODELS:
+            return cfg.pollinations_text_model
+    if POLLINATIONS_TEXT_DEFAULT in POLLINATIONS_TEXT_MODELS:
+        return POLLINATIONS_TEXT_DEFAULT
+    return POLLINATIONS_TEXT_MODELS[0]
 
 
 def _openrouter_content_to_text(content: Any) -> str:
@@ -502,7 +561,76 @@ def _send_openrouter_request(
     return None
 
 
-def _summarize_history(chat_id: int) -> None:
+def _send_pollinations_request(
+    chat_id: Optional[int],
+    stored_history: List[Dict[str, Any]],
+    user_message: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if not POLLINATIONS_TEXT_MODELS or not POLLINATIONS_TEXT_BASE_URL:
+        return None
+    if not _can_use_openrouter_message(user_message):
+        return None
+
+    model_name = _pollinations_text_model_for_chat(chat_id)
+    if model_name not in POLLINATIONS_TEXT_MODELS:
+        model_name = POLLINATIONS_TEXT_MODELS[0]
+
+    user_text = _parts_to_text(user_message.get("parts", []))
+    messages = _prepare_openrouter_messages(stored_history, user_text)
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": 1.0,
+        "reasoning_effort": "medium",
+    }
+
+    try:
+        response = requests.post(
+            POLLINATIONS_TEXT_BASE_URL,
+            json=payload,
+            timeout=POLLINATIONS_TEXT_TIMEOUT,
+        )
+        if response.status_code in {429, 503}:
+            log.warning(
+                "Pollinations returned %s for model %s. Retrying other providers...",
+                response.status_code,
+                model_name,
+            )
+            time.sleep(SERVICE_UNAVAILABLE_DELAY)
+            return None
+        response.raise_for_status()
+        reply_text: Optional[str] = None
+
+        if "application/json" in response.headers.get("Content-Type", ""):
+            data = response.json()
+            choices = data.get("choices") or []
+            if choices:
+                message = choices[0].get("message") or {}
+                content = message.get("content")
+                reply_text = _openrouter_content_to_text(content)
+            else:
+                reply_text = (data.get("text") or "").strip()
+        if not reply_text:
+            reply_text = response.text.strip()
+
+        if not reply_text:
+            raise ValueError("Pollinations response is empty")
+
+        return {
+            "parts": [{"text": reply_text}],
+            "reply_text": reply_text,
+            "fn_call": None,
+            "model_name": f"pollinations:{model_name}",
+            "provider": "pollinations",
+        }
+    except requests.RequestException as exc:
+        log.warning("Pollinations request failed (model %s): %s", model_name, exc)
+    except ValueError as exc:
+        log.warning("Pollinations response error (model %s): %s", model_name, exc)
+    return None
+
+
+def _summarize_history(chat_id: int, provider_override: Optional[str] = None) -> None:
     chat_history = history.get(chat_id, [])
     if len(chat_history) <= MAX_HISTORY:
         return
@@ -518,7 +646,7 @@ def _summarize_history(chat_id: int) -> None:
     )
     summary_message = {"role": "user", "parts": [{"text": prompt_text}]}
 
-    providers = _provider_sequence()
+    providers = _provider_sequence(_chat_provider_preference(chat_id, provider_override))
     log.info("History summary provider order: %s", providers)
 
     for provider in providers:
@@ -527,6 +655,8 @@ def _summarize_history(chat_id: int) -> None:
                 result = _send_openrouter_request([], summary_message)
             elif provider == "gemini":
                 result = _send_gemini_request([], summary_message)
+            elif provider == "pollinations":
+                result = _send_pollinations_request(chat_id, [], summary_message)
             else:
                 continue
 
@@ -550,16 +680,19 @@ def _summarize_history(chat_id: int) -> None:
     history[chat_id] = chat_history[-MAX_HISTORY:]
 
 
-def llm_request(chat_id: int, prompt_parts: List[Any]) -> Tuple[Optional[str], str, Optional[Any]]:
-    _summarize_history(chat_id)
+def llm_request(chat_id: int, prompt_parts: List[Any], provider_override: Optional[str] = None) -> Tuple[Optional[str], str, Optional[Any]]:
+    preferred_provider = _chat_provider_preference(chat_id, provider_override)
+    _summarize_history(chat_id, provider_override)
     stored_history = history.get(chat_id, [])
     user_message = _normalize_prompt_parts(prompt_parts)
 
-    for provider in _provider_sequence():
+    for provider in _provider_sequence(preferred_provider):
         if provider == "gemini":
             result = _send_gemini_request(stored_history, user_message)
         elif provider == "openrouter":
             result = _send_openrouter_request(stored_history, user_message)
+        elif provider == "pollinations":
+            result = _send_pollinations_request(chat_id, stored_history, user_message)
         else:
             result = None
 
@@ -685,9 +818,9 @@ def check_available_models() -> List[str]:
                 )
                 text = _extract_text_from_parts(_response_parts(response))
                 if text:
-                    working_models.append(model_name)
+                working_models.append(model_name)
                     log.info("Model %s is available with key #%s", model_name, key_idx + 1)
-                    break
+                break
             except Exception:
                 continue
     if working_models:

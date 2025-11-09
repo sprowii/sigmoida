@@ -78,7 +78,7 @@ OPENROUTER_SITE_NAME = os.getenv("OPENROUTER_SITE_NAME")
 OPENROUTER_TIMEOUT = float(os.getenv("OPENROUTER_TIMEOUT", "45"))
 LLM_PROVIDER_ORDER: List[str] = [
     provider.strip().lower()
-    for provider in os.getenv("LLM_PROVIDER_ORDER", "gemini,openrouter").split(",")
+    for provider in os.getenv("LLM_PROVIDER_ORDER", "gemini,openrouter,pollinations").split(",")
     if provider.strip()
 ]
 
@@ -98,6 +98,21 @@ POLLINATIONS_HEIGHT = int(os.getenv("POLLINATIONS_HEIGHT", "1024"))
 POLLINATIONS_BASE_URL = os.getenv("POLLINATIONS_BASE_URL", "https://pollinations.ai")
 POLLINATIONS_SEED = os.getenv("POLLINATIONS_SEED")
 POLLINATIONS_TIMEOUT = float(os.getenv("POLLINATIONS_TIMEOUT", "30"))
+POLLINATIONS_TEXT_BASE_URL = os.getenv("POLLINATIONS_TEXT_BASE_URL", "https://text.pollinations.ai/openai")
+POLLINATIONS_TEXT_MODELS: List[str] = [
+    model.strip()
+    for model in os.getenv(
+        "POLLINATIONS_TEXT_MODELS",
+        "openai,mistral,searchgpt,roblox",
+    ).split(",")
+    if model.strip()
+]
+if not POLLINATIONS_TEXT_MODELS:
+    POLLINATIONS_TEXT_MODELS = ["openai"]
+POLLINATIONS_TEXT_DEFAULT = os.getenv("POLLINATIONS_TEXT_DEFAULT", POLLINATIONS_TEXT_MODELS[0])
+if POLLINATIONS_TEXT_DEFAULT not in POLLINATIONS_TEXT_MODELS:
+    POLLINATIONS_TEXT_DEFAULT = POLLINATIONS_TEXT_MODELS[0]
+POLLINATIONS_TEXT_TIMEOUT = float(os.getenv("POLLINATIONS_TEXT_TIMEOUT", "45"))
 
 MAX_HISTORY = 10
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB предел на сохранение изображений

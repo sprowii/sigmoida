@@ -42,6 +42,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_profile(update)
+    poll_models = ", ".join(config.POLLINATIONS_MODELS) if getattr(config, "POLLINATIONS_MODELS", None) else config.POLLINATIONS_MODEL
+    poll_text_models = ", ".join(config.POLLINATIONS_TEXT_MODELS) if getattr(config, "POLLINATIONS_TEXT_MODELS", None) else config.POLLINATIONS_TEXT_DEFAULT
+    provider_options = ["gemini"]
+    if config.OPENROUTER_API_KEYS and config.OPENROUTER_MODELS:
+        provider_options.append("openrouter")
+    if getattr(config, "POLLINATIONS_TEXT_MODELS", None):
+        provider_options.append("pollinations")
+    provider_hint = ", ".join(provider_options + ["auto"])
     await update.message.reply_text(
         "<b>Команды:</b>\n"
         "/settings – показать текущие настройки\n"
@@ -50,9 +58,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/set_minmsgs &lt;n&gt; – минимум сообщений для автопоста (админ)\n"
         "/set_msgsize &lt;s|m|l&gt; – размер ответа (админ)\n"
         "/draw &lt;описание&gt; – нарисовать изображение\n"
-        "/set_draw_model &lt;название&gt; – выбрать модель Pollinations\n"
+        f"/set_draw_model &lt;название&gt; – выбрать модель Pollinations ({html.escape(poll_models)})\n"
+        f"/set_pollinations_text_model &lt;название&gt; – выбрать текстовую модель Pollinations ({html.escape(poll_text_models)})\n"
+        f"/set_provider &lt;gemini|openrouter|pollinations|auto&gt; – выбрать провайдера ответа ({provider_hint})\n"
         "/game &lt;идея&gt; – сгенерировать игру на Phaser через ИИ\n"
-        "/login – получить код для входа на сайт\n"
+        "/login – получить код для входа на сайт (отправь /login боту)\n"
         "/reset – очистить историю диалога\n"
         "/privacy – политика конфиденциальности",
         parse_mode=ParseMode.HTML,
@@ -152,10 +162,21 @@ async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_profile(update)
     cfg = get_cfg(update.effective_chat.id)
+    provider = cfg.llm_provider or "auto"
+    pollinations_text = cfg.pollinations_text_model or config.POLLINATIONS_TEXT_DEFAULT
+    provider_line = (
+        f"<b>LLM:</b> {html.escape(provider)}"
+        + (
+            f" (Pollinations → {html.escape(pollinations_text)})"
+            if provider == "pollinations" and pollinations_text
+            else ""
+        )
+    )
     await update.message.reply_text(
         f"<b>Автопосты:</b> {'вкл' if cfg.autopost_enabled else 'выкл'}.\n"
         f"<b>Интервал:</b> {cfg.interval} сек, <b>мин. сообщений:</b> {cfg.min_messages}.\n"
-        f"<b>Размер ответа:</b> {cfg.msg_size or 'default'}.",
+        f"<b>Размер ответа:</b> {cfg.msg_size or 'default'}.\n"
+        f"{provider_line}",
         parse_mode=ParseMode.HTML,
     )
 async def autopost_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,12 +298,102 @@ async def set_draw_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cfg.pollinations_model = selected
     await persist_chat_data(chat_id)
     await message.reply_text(f"Для этого чата теперь используется Pollinations модель: {selected}")
+
+
+async def set_pollinations_text_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
+    message = update.message
+    if not message:
+        return
+    if not getattr(config, "POLLINATIONS_TEXT_MODELS", None):
+        await message.reply_text("Текстовые модели Pollinations не настроены.")
+        return
+    chat_id = update.effective_chat.id
+    cfg = get_cfg(chat_id)
+    available = config.POLLINATIONS_TEXT_MODELS
+    lookup = {model.lower(): model for model in available}
+    if not context.args:
+        current = cfg.pollinations_text_model or config.POLLINATIONS_TEXT_DEFAULT or available[0]
+        await message.reply_text(
+            "Текущая текстовая модель Pollinations: <b>{}</b>\nДоступные: {}".format(
+                html.escape(current), ", ".join(available)
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    value = context.args[0].strip().lower()
+    selected = lookup.get(value)
+    if not selected:
+        await message.reply_text(
+            "Неизвестная модель. Доступные варианты: {}.".format(", ".join(available))
+        )
+        return
+    cfg.pollinations_text_model = selected
+    await persist_chat_data(chat_id)
+    await message.reply_text(f"Генерация текста Pollinations теперь использует модель: {selected}")
+
+
+async def set_provider(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
+    message = update.message
+    if not message:
+        return
+    available: List[str] = []
+    if config.API_KEYS:
+        available.append("gemini")
+    if config.OPENROUTER_API_KEYS and config.OPENROUTER_MODELS:
+        available.append("openrouter")
+    if getattr(config, "POLLINATIONS_TEXT_MODELS", None):
+        available.append("pollinations")
+    if not available:
+        await message.reply_text("Нет доступных провайдеров LLM. Проверь ключи в настройках.")
+        return
+    chat_id = update.effective_chat.id
+    cfg = get_cfg(chat_id)
+    if not context.args:
+        current = cfg.llm_provider or "auto"
+        await message.reply_text(
+            "Текущий провайдер: <b>{current}</b>\n"
+            "Доступные варианты: {choices}, auto (используй <code>/set_provider auto</code> для автоматического выбора)."
+            .format(current=html.escape(current), choices=", ".join(available)),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    value = context.args[0].strip().lower()
+    if value in {"auto", "default"}:
+        cfg.llm_provider = ""
+        await persist_chat_data(chat_id)
+        await message.reply_text("Буду автоматически переключаться между доступными провайдерами.")
+        return
+    if value not in available:
+        await message.reply_text(
+            "Неизвестный провайдер. Доступные варианты: {choices}, auto."
+            .format(choices=", ".join(available))
+        )
+        return
+    cfg.llm_provider = value
+    if value == "pollinations":
+        if not cfg.pollinations_text_model or cfg.pollinations_text_model not in config.POLLINATIONS_TEXT_MODELS:
+            cfg.pollinations_text_model = (
+                config.POLLINATIONS_TEXT_DEFAULT or config.POLLINATIONS_TEXT_MODELS[0]
+            )
+    await persist_chat_data(chat_id)
+    if value == "pollinations":
+        await message.reply_text(
+            "Для этого чата выбран провайдер LLM: pollinations.\n"
+            f"Используется текстовая модель Pollinations: {cfg.pollinations_text_model}.\n"
+            "Чтобы сменить модель, воспользуйся командой /set_pollinations_text_model <название>."
+        )
+    else:
+        await message.reply_text(f"Для этого чата выбран провайдер LLM: {value}")
 async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, prompt_parts: List):
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     data_updated = False
+    cfg = get_cfg(chat_id)
+    provider_override = cfg.llm_provider or None
     try:
         reply, model_used, function_call = await asyncio.get_running_loop().run_in_executor(
-            None, llm_request, chat_id, prompt_parts
+            None, llm_request, chat_id, prompt_parts, provider_override
         )
         if function_call and function_call.name == "generate_image":
             await generate_and_send_image(update, context, function_call.args.get("prompt", ""))
@@ -297,6 +408,11 @@ async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                     log.warning(f"HTML parse failed, sending plain text. Error: {exc}")
                     plain_text_chunk = strip_html_tags(chunk)
                     await update.message.reply_text(plain_text_chunk, disable_web_page_preview=True)
+            data_updated = True
+        else:
+            await update.message.reply_text(
+                "⚠️ Модель не вернула ответа. Попробуй переформулировать запрос или сменить провайдера через /set_provider."
+            )
             data_updated = True
     except Exception as exc:
         log.exception(exc)
@@ -431,9 +547,21 @@ async def game_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             or " ".join(filter(None, [effective_user.first_name, effective_user.last_name]))
             or None
         )
+    cfg = get_cfg(chat_id)
+    provider_override = cfg.llm_provider or None
     try:
         generated: GeneratedGame = await loop.run_in_executor(
-            None, generate_game, chat_id, idea_text, author_id, author_username, author_name
+            None,
+            partial(
+                generate_game,
+                chat_id,
+                idea_text,
+                author_id,
+                author_username,
+                author_name,
+                provider_override,
+                cfg.pollinations_text_model or None,
+            ),
         )
     except ValueError as exc:
         await message.reply_text(str(exc))

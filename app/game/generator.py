@@ -16,6 +16,7 @@ from app import config
 from app.llm.client import llm_request
 from app.logging_config import log
 from app.storage.redis_store import store_game_payload
+from app.state import ChatConfig, configs
 
 PROMPT_TEMPLATE = (
     """
@@ -229,18 +230,48 @@ def _normalize_chat_id(chat_id: Optional[int]) -> int:
         return 0
 
 
+def _resolve_provider(
+    chat_id: int,
+    provider: Optional[str],
+    pollinations_model: Optional[str] = None,
+) -> Optional[str]:
+    cfg = configs.setdefault(chat_id, ChatConfig())
+    normalized = (provider or "").strip().lower() if provider else ""
+
+    if normalized in {"", "auto", "default"}:
+        cfg.llm_provider = ""
+        if pollinations_model and pollinations_model in config.POLLINATIONS_TEXT_MODELS:
+            cfg.pollinations_text_model = pollinations_model
+        return None
+
+    if normalized in {"gemini", "openrouter", "pollinations"}:
+        cfg.llm_provider = normalized
+        if normalized == "pollinations" and pollinations_model in config.POLLINATIONS_TEXT_MODELS:
+            cfg.pollinations_text_model = pollinations_model
+        return normalized
+
+    if pollinations_model and pollinations_model in config.POLLINATIONS_TEXT_MODELS:
+        cfg.pollinations_text_model = pollinations_model
+
+    return cfg.llm_provider or None
+
+
 def generate_game(
     chat_id: Optional[int],
     idea: str,
     author_id: Optional[int] = None,
     author_username: Optional[str] = None,
     author_name: Optional[str] = None,
+    provider: Optional[str] = None,
+    pollinations_model: Optional[str] = None,
 ) -> GeneratedGame:
     if not idea or not idea.strip():
         raise ValueError("Описание игры не должно быть пустым.")
 
     prompt = _build_prompt(idea)
-    response, model_name, _ = llm_request(_normalize_chat_id(chat_id), [{"text": prompt}])
+    normalized_chat_id = _normalize_chat_id(chat_id)
+    provider_override = _resolve_provider(normalized_chat_id, provider, pollinations_model)
+    response, model_name, _ = llm_request(normalized_chat_id, [{"text": prompt}], provider_override)
     if not response:
         raise RuntimeError("Модель не вернула код игры.")
 
@@ -301,6 +332,8 @@ def tweak_game(
     author_id: Optional[int] = None,
     author_username: Optional[str] = None,
     author_name: Optional[str] = None,
+    provider: Optional[str] = None,
+    pollinations_model: Optional[str] = None,
 ) -> GeneratedGame:
     if not instructions or not instructions.strip():
         raise ValueError("Описание изменений не должно быть пустым.")
@@ -313,7 +346,9 @@ def tweak_game(
     base_summary = payload.get("summary", "")
 
     prompt = _build_tweak_prompt(base_idea, base_summary, base_code, instructions)
-    response, model_name, _ = llm_request(_normalize_chat_id(chat_id), [{"text": prompt}])
+    normalized_chat_id = _normalize_chat_id(chat_id)
+    provider_override = _resolve_provider(normalized_chat_id, provider, pollinations_model)
+    response, model_name, _ = llm_request(normalized_chat_id, [{"text": prompt}], provider_override)
     if not response:
         raise RuntimeError("Модель не вернула обновлённый код игры.")
 

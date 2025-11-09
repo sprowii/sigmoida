@@ -12,6 +12,8 @@ class ChatConfig:
     last_post_ts: float = 0.0
     new_msg_counter: int = 0
     pollinations_model: str = ""
+    llm_provider: str = ""
+    pollinations_text_model: str = ""
 
 
 configs: Dict[int, ChatConfig] = {}

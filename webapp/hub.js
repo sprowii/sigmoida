@@ -1,3 +1,7 @@
+const PROVIDER_STORAGE_KEY = "sigmoida_provider";
+const POLLINATIONS_TEXT_STORAGE_KEY = "sigmoida_pollinations_model";
+const PROVIDER_OPTIONS = ["auto", "gemini", "openrouter", "pollinations"];
+
 const state = {
     user: null,
     scope: "all",
@@ -7,6 +11,10 @@ const state = {
     reachedEnd: false,
     generating: false,
     currentTweakGameId: null,
+    provider: "auto",
+    pollinationsModel: null,
+    pollinationsModels: [],
+    pollinationsDefault: null,
 };
 
 const PROGRESS_PHRASES = [
@@ -40,6 +48,9 @@ const elements = {
     generatorTextarea: document.getElementById("generator-idea"),
     generatorStatus: document.getElementById("generator-status"),
     generatorSubmit: document.getElementById("generator-submit"),
+    providerSelect: document.getElementById("provider-select"),
+    pollinationsControl: document.getElementById("pollinations-text-control"),
+    pollinationsSelect: document.getElementById("pollinations-text-select"),
     modal: document.getElementById("login-modal"),
     modalForm: document.getElementById("login-form"),
     modalCancel: document.getElementById("login-cancel"),
@@ -53,6 +64,29 @@ const elements = {
     tweakTitle: document.getElementById("tweak-title"),
     gameTemplate: document.getElementById("game-card-template"),
 };
+
+async function loadModelMetadata() {
+    try {
+        const response = await fetch("/api/models", { credentials: "same-origin" });
+        if (!response.ok) {
+            throw new Error("models request failed");
+        }
+        const data = await response.json();
+        const pollinationsModels = Array.isArray(data.pollinations_text_models) ? data.pollinations_text_models : [];
+        state.pollinationsModels = pollinationsModels;
+        state.pollinationsDefault =
+            data.pollinations_text_default && pollinationsModels.includes(data.pollinations_text_default)
+                ? data.pollinations_text_default
+                : pollinationsModels[0] || null;
+        if (!state.pollinationsModel && state.pollinationsDefault) {
+            setPollinationsModel(state.pollinationsDefault, { persist: false });
+        } else {
+            updatePollinationsControl();
+        }
+    } catch (error) {
+        console.debug("models metadata error", error);
+    }
+}
 
 async function extractErrorMessage(response, fallback = "Произошла ошибка") {
     const contentType = response.headers.get("Content-Type") || "";
@@ -117,6 +151,7 @@ function showModal() {
 
 function hideModal() {
     elements.modal.classList.add("hidden");
+    blurActiveInput();
 }
 
 function showTweakModal(game) {
@@ -131,6 +166,7 @@ function showTweakModal(game) {
 function hideTweakModal() {
     state.currentTweakGameId = null;
     elements.tweakModal.classList.add("hidden");
+    blurActiveInput();
 }
 
 function setLoading(loading) {
@@ -310,6 +346,16 @@ async function fetchSession() {
         }
         const data = await response.json();
         state.user = data.authenticated ? data.user : null;
+        if (typeof data.provider === "string") {
+            setProvider(data.provider);
+        }
+        if (typeof data.pollinations_model === "string") {
+            setPollinationsModel(data.pollinations_model, { persist: true });
+        } else if (!state.pollinationsModel && state.pollinationsDefault) {
+            setPollinationsModel(state.pollinationsDefault, { persist: false });
+        } else {
+            updatePollinationsControl();
+        }
         renderSession();
     } catch (error) {
         console.error("session error", error);
@@ -361,6 +407,160 @@ async function loadGames({ reset = false } = {}) {
     setLoading(false);
 }
 
+function blurActiveInput(targetId) {
+    const preferred = targetId ? document.getElementById(targetId) : null;
+    if (preferred && typeof preferred.blur === "function") {
+        preferred.blur();
+    }
+    const active = document.activeElement;
+    if (active && active !== preferred && typeof active.blur === "function") {
+        active.blur();
+    }
+}
+
+function normalizeProvider(value) {
+    if (!value) {
+        return "auto";
+    }
+    const normalized = String(value).trim().toLowerCase();
+    return PROVIDER_OPTIONS.includes(normalized) ? normalized : "auto";
+}
+
+function normalizePollinationsModel(value) {
+    if (!value || !state.pollinationsModels.length) {
+        return null;
+    }
+    const trimmed = String(value).trim();
+    if (!trimmed) {
+        return null;
+    }
+    if (state.pollinationsModels.includes(trimmed)) {
+        return trimmed;
+    }
+    const lowered = trimmed.toLowerCase();
+    return state.pollinationsModels.find((model) => model.toLowerCase() === lowered) || null;
+}
+
+function setPollinationsModel(value, { persist = true } = {}) {
+    const normalized = normalizePollinationsModel(value) || state.pollinationsDefault || state.pollinationsModels[0] || null;
+    state.pollinationsModel = normalized;
+    if (elements.pollinationsSelect && normalized) {
+        elements.pollinationsSelect.value = normalized;
+    }
+    if (persist && normalized) {
+        try {
+            localStorage.setItem(POLLINATIONS_TEXT_STORAGE_KEY, normalized);
+        } catch (error) {
+            console.debug("pollinations model persist failed", error);
+        }
+    }
+    updatePollinationsControl();
+}
+
+function setProvider(value, { persist = true } = {}) {
+    const normalized = normalizeProvider(value);
+    state.provider = normalized;
+    if (elements.providerSelect) {
+        elements.providerSelect.value = normalized;
+    }
+    if (normalized === "pollinations") {
+        const fallback = state.pollinationsModel && normalizePollinationsModel(state.pollinationsModel);
+        if (!fallback && (state.pollinationsDefault || state.pollinationsModels.length)) {
+            setPollinationsModel(state.pollinationsDefault || state.pollinationsModels[0] || null, { persist });
+        }
+    }
+    if (persist) {
+        try {
+            localStorage.setItem(PROVIDER_STORAGE_KEY, normalized);
+        } catch (error) {
+            console.debug("provider persist failed", error);
+        }
+    }
+    updatePollinationsControl();
+}
+
+function loadStoredProvider() {
+    try {
+        const stored = localStorage.getItem(PROVIDER_STORAGE_KEY);
+        if (stored) {
+            setProvider(stored, { persist: false });
+        }
+    } catch (error) {
+        console.debug("provider load failed", error);
+    }
+}
+
+function loadStoredPollinationsModel() {
+    if (!state.pollinationsModels.length) {
+        return;
+    }
+    try {
+        const stored = localStorage.getItem(POLLINATIONS_TEXT_STORAGE_KEY);
+        if (stored) {
+            setPollinationsModel(stored, { persist: false });
+        }
+    } catch (error) {
+        console.debug("pollinations model load failed", error);
+    }
+}
+
+function updatePollinationsControl() {
+    const container = elements.pollinationsControl;
+    const select = elements.pollinationsSelect;
+    if (!container || !select) {
+        return;
+    }
+    const hasModels = state.pollinationsModels.length > 0;
+    if (!hasModels) {
+        container.classList.remove("active");
+        return;
+    }
+    const options = state.pollinationsModels;
+    const needsRebuild =
+        select.options.length !== options.length ||
+        options.some((model, index) => select.options[index]?.value !== model);
+    if (needsRebuild) {
+        select.innerHTML = "";
+        options.forEach((model) => {
+            const option = document.createElement("option");
+            option.value = model;
+            option.textContent = model;
+            select.appendChild(option);
+        });
+    }
+    if (state.provider === "pollinations") {
+        const normalized = normalizePollinationsModel(state.pollinationsModel) || state.pollinationsDefault || options[0];
+        state.pollinationsModel = normalized;
+        select.value = normalized;
+        container.classList.add("active");
+    } else {
+        container.classList.remove("active");
+    }
+}
+
+function setupKeyboardDismissers() {
+    document.querySelectorAll("[data-dismiss-keyboard]").forEach((button) => {
+        button.addEventListener("click", () => {
+            const target = button.getAttribute("data-dismiss-keyboard");
+            blurActiveInput(target);
+        });
+    });
+
+    ["tweak-modal", "login-modal"].forEach((modalId) => {
+        const modal = document.getElementById(modalId);
+        if (!modal) {
+            return;
+        }
+        const handleModalTap = (event) => {
+            if (event.target === modal) {
+                blurActiveInput();
+            }
+        };
+        modal.addEventListener("click", handleModalTap);
+        modal.addEventListener("touchstart", handleModalTap);
+    });
+}
+
 async function login(code) {
     const payload = { code };
     const response = await fetch(routes.authLogin, {
@@ -374,6 +574,12 @@ async function login(code) {
         throw new Error(text || "Код не подошёл");
     }
     const data = await response.json();
+    if (typeof data.provider === "string") {
+        setProvider(data.provider);
+    }
+    if (typeof data.pollinations_model === "string") {
+        setPollinationsModel(data.pollinations_model, { persist: true });
+    }
     state.user = data.user || null;
     renderSession();
 }
@@ -384,16 +590,24 @@ async function handleGeneratorSubmit(event) {
         return;
     }
     const idea = elements.generatorTextarea.value.trim();
+    blurActiveInput("generator-idea");
     if (!idea) {
         setGenerating(false, "Напиши, во что будем играть.", "error");
         return;
     }
     setGenerating(true, PROGRESS_PHRASES[0]);
     try {
+        const payload = {
+            idea,
+            provider: state.provider,
+        };
+        if (state.provider === "pollinations" && state.pollinationsModel) {
+            payload.pollinations_model = state.pollinationsModel;
+        }
         const response = await fetch(routes.games, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ idea }),
+            body: JSON.stringify(payload),
             credentials: "same-origin",
         });
         if (!response.ok) {
@@ -425,6 +639,7 @@ async function handleTweakSubmit(event) {
         return;
     }
     const instructions = elements.tweakTextarea.value.trim();
+    blurActiveInput("tweak-instructions");
     if (!instructions) {
         elements.tweakError.textContent = "Опиши, что нужно изменить.";
         elements.tweakError.classList.remove("hidden");
@@ -435,12 +650,19 @@ async function handleTweakSubmit(event) {
     submitButton.disabled = true;
     submitButton.textContent = "Применяем...";
     try {
+        const payload = {
+            instructions,
+            provider: state.provider,
+        };
+        if (state.provider === "pollinations" && state.pollinationsModel) {
+            payload.pollinations_model = state.pollinationsModel;
+        }
         const response = await fetch(
             `${routes.games}/${encodeURIComponent(state.currentTweakGameId)}${routes.tweakSuffix}`,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ instructions }),
+                body: JSON.stringify(payload),
                 credentials: "same-origin",
             },
         );
@@ -539,6 +761,16 @@ function bindEvents() {
     elements.loadMore.addEventListener("click", () => loadGames({ reset: false }));
     elements.modalCancel.addEventListener("click", hideModal);
     elements.modalForm.addEventListener("submit", handleLoginSubmit);
+    if (elements.providerSelect) {
+        elements.providerSelect.addEventListener("change", (event) => {
+            setProvider(event.target.value);
+        });
+    }
+    if (elements.pollinationsSelect) {
+        elements.pollinationsSelect.addEventListener("change", (event) => {
+            setPollinationsModel(event.target.value);
+        });
+    }
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
             if (!elements.modal.classList.contains("hidden")) {
@@ -558,10 +790,14 @@ function bindEvents() {
     if (elements.tweakCancel) {
         elements.tweakCancel.addEventListener("click", hideTweakModal);
     }
+    setupKeyboardDismissers();
 }
 
 async function bootstrap() {
     bindEvents();
+    await loadModelMetadata();
+    loadStoredProvider();
+    loadStoredPollinationsModel();
     await fetchSession();
     updateChips();
     await loadGames({ reset: true });

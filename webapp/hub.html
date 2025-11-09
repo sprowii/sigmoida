@@ -45,8 +45,22 @@
                 <form id="generator-form" class="generator-form">
                     <label for="generator-idea">Идея игры</label>
                     <textarea id="generator-idea" name="idea" rows="4" placeholder="Например: ретро-платформер о роботе, который спасает летающий город" required></textarea>
+                    <div class="form-control provider-select">
+                        <label for="provider-select">Провайдер LLM</label>
+                        <select id="provider-select" name="provider">
+                            <option value="auto">Авто (подбирается автоматически)</option>
+                            <option value="gemini">Gemini</option>
+                            <option value="openrouter">DeepSeek (OpenRouter)</option>
+                            <option value="pollinations">Pollinations (openai/mistral/searchgpt/roblox)</option>
+                        </select>
+                    </div>
+                    <div class="form-control provider-select pollinations-only" id="pollinations-text-control">
+                        <label for="pollinations-text-select">Модель Pollinations</label>
+                        <select id="pollinations-text-select" name="pollinations_model"></select>
+                    </div>
                     <div class="generator-actions">
                         <button type="submit" class="button primary" id="generator-submit">Создать</button>
+                        <button type="button" class="button ghost keyboard-dismiss" data-dismiss-keyboard="generator-idea">Скрыть клавиатуру</button>
                         <span class="generator-status" id="generator-status" role="status" aria-live="polite"></span>
                     </div>
                 </form>
@@ -60,7 +74,8 @@
                 <div class="info-columns">
                     <article>
                         <h3>Как начать</h3>
-                        <p>Авторизуйся кодом из бота, чтобы видеть личный каталог и делиться играми с друзьями.</p>
+                        <p>Авторизуйся кодом из бота, чтобы видеть личный каталог и делиться играми с друзьями.
+                        Отправь команду <code>/login</code> в Telegram-бот, скопируй код и введи его здесь.</p>
                     </article>
                     <article>
                         <h3>Гибкость</h3>
@@ -110,7 +125,7 @@
     <div class="modal hidden" id="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
         <div class="modal-content">
             <h2 id="login-title">Войти по коду</h2>
-            <p class="modal-text">Бот пришлёт тебе код из 6 символов. Введи его здесь, чтобы открыть личный список игр.</p>
+            <p class="modal-text">Отправь команде <code>/login</code> в Telegram-бот — он пришлёт код из 6 символов. Введи его здесь, чтобы открыть личный список игр.</p>
             <form id="login-form">
                 <label for="login-code">Код входа</label>
                 <input id="login-code" name="code" type="text" inputmode="text" autocomplete="one-time-code" maxlength="6" placeholder="ABC123" required />
@@ -150,6 +165,7 @@
                 <label for="tweak-instructions">Описание изменений</label>
                 <textarea id="tweak-instructions" name="instructions" rows="4" required></textarea>
                 <div class="modal-actions">
+                    <button type="button" class="button ghost keyboard-dismiss" data-dismiss-keyboard="tweak-instructions">Скрыть клавиатуру</button>
                     <button type="button" class="button ghost" id="tweak-cancel">Отмена</button>
                     <button type="submit" class="button primary">Применить</button>
                 </div>

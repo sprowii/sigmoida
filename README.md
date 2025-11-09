@@ -12,7 +12,7 @@
 - Автопосты в группы (если включить)
 - Сохраняет историю и настройки в Redis
 - Форматирует ответы через HTML-теги Telegram
-- Может использовать как модели Google Gemini, так и модели через OpenRouter (DeepSeek и др.)
+- Может использовать как модели Google Gemini, так и модели через OpenRouter (DeepSeek и др.) и Pollinations (openai/mistral/searchgpt/roblox) — переключается командой `/set_provider`
 
 ## Что нужно для запуска
 
@@ -54,10 +54,12 @@ OPENROUTER_API_KEY=твой_openrouter_api_key
 OPENROUTER_MODELS=deepseek/deepseek-chat-v3-0324:free,deepseek/deepseek-r1-0528:free,tngtech/deepseek-r1t2-chimera:free
 OPENROUTER_SITE_URL=https://example.com
 OPENROUTER_SITE_NAME=Sigmoida
-LLM_PROVIDER_ORDER=gemini,openrouter
+LLM_PROVIDER_ORDER=gemini,openrouter,pollinations
 # Опционально: Pollinations
 POLLINATIONS_MODEL=flux
 POLLINATIONS_MODELS=flux,flux-realistic,flux-anime
+POLLINATIONS_TEXT_MODELS=openai,mistral,searchgpt,roblox
+POLLINATIONS_TEXT_DEFAULT=openai
 ```
 
 4. Запусти:
@@ -77,6 +79,8 @@ python сигмоида.py
 - `/help` — справка по командам
 - `/draw описание` — нарисовать картинку
 - `/set_draw_model название` — выбрать модель Pollinations для /draw и автогенерации
+- `/set_pollinations_text_model название` — выбрать текстовую модель Pollinations для ответов
+- `/set_provider gemini|openrouter|pollinations|auto` — выбрать провайдера LLM (Gemini, DeepSeek/OpenRouter, Pollinations или авто)
 - `/game идея` — создать игру на Phaser
 - `/login` — получить код для входа на сайт
 - `/reset` — очистить историю

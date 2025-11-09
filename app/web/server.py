@@ -88,6 +88,34 @@ def _current_user() -> Optional[Dict[str, Any]]:
     }
 
 
+def _normalize_provider_choice(raw: Any) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    if value in {"", "auto", "default"}:
+        return None
+    if value == "gemini" and config.API_KEYS:
+        return "gemini"
+    if value == "openrouter" and config.OPENROUTER_API_KEYS and config.OPENROUTER_MODELS:
+        return "openrouter"
+    if value == "pollinations" and getattr(config, "POLLINATIONS_TEXT_MODELS", None):
+        return "pollinations"
+    return None
+
+
+def _normalize_pollinations_text_model(raw: Any) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    if value in config.POLLINATIONS_TEXT_MODELS:
+        return value
+    lowered_lookup = {model.lower(): model for model in config.POLLINATIONS_TEXT_MODELS}
+    return lowered_lookup.get(value.lower())
+    return None
+
+
 def _require_user() -> Dict[str, Any]:
     user = _current_user()
     if not user:
@@ -185,6 +213,8 @@ def _generation_context() -> Dict[str, Any]:
         "author_id": author_id,
         "author_username": author_username,
         "author_name": author_name,
+        "provider": session.get("llm_provider"),
+        "pollinations_model": session.get("pollinations_text_model"),
     }
 
 
@@ -267,8 +297,16 @@ def fetch_game(game_id: str):
 def auth_session():
     user = _current_user()
     if not user:
-        return jsonify({"authenticated": False})
-    return jsonify({"authenticated": True, "user": user})
+        return jsonify(
+            {
+                "authenticated": False,
+                "provider": "auto",
+                "pollinations_model": config.POLLINATIONS_TEXT_DEFAULT,
+            }
+        )
+    provider = session.get("llm_provider") or "auto"
+    poll_model = session.get("pollinations_text_model") or config.POLLINATIONS_TEXT_DEFAULT
+    return jsonify({"authenticated": True, "user": user, "provider": provider, "pollinations_model": poll_model})
 
 
 @flask_app.route("/api/auth/login", methods=["POST"])
@@ -288,13 +326,34 @@ def auth_login():
     }
     session.permanent = True
     user = _current_user()
-    return jsonify({"authenticated": True, "user": user})
+    provider = session.get("llm_provider") or "auto"
+    poll_model = session.get("pollinations_text_model") or config.POLLINATIONS_TEXT_DEFAULT
+    return jsonify({"authenticated": True, "user": user, "provider": provider, "pollinations_model": poll_model})
 
 
 @flask_app.route("/api/auth/logout", methods=["POST"])
 def auth_logout():
     session.pop("user", None)
     return jsonify({"authenticated": False})
+
+
+@flask_app.route("/api/models", methods=["GET"])
+def list_models_meta():
+    providers: List[str] = []
+    if config.API_KEYS:
+        providers.append("gemini")
+    if config.OPENROUTER_API_KEYS and config.OPENROUTER_MODELS:
+        providers.append("openrouter")
+    if getattr(config, "POLLINATIONS_TEXT_MODELS", None):
+        providers.append("pollinations")
+    return jsonify(
+        {
+            "providers": providers,
+            "pollinations_text_models": config.POLLINATIONS_TEXT_MODELS,
+            "pollinations_text_default": config.POLLINATIONS_TEXT_DEFAULT,
+            "openrouter_models": config.OPENROUTER_MODELS,
+        }
+    )
 
 
 @flask_app.route("/api/games", methods=["GET"])
@@ -337,6 +396,20 @@ def create_game_api():
     idea = (data.get("idea") or "").strip()
     if len(idea) < 4:
         _abort_json(400, "Опиши идею игры чуть подробнее.", "invalid_request")
+    provider_raw = data.get("provider")
+    provider_choice: Optional[str] = None
+    if isinstance(provider_raw, str):
+        normalized = provider_raw.strip().lower()
+        provider_choice = _normalize_provider_choice(provider_raw)
+        if normalized in {"auto", "default", ""}:
+            session.pop("llm_provider", None)
+        elif provider_choice:
+            session["llm_provider"] = provider_choice
+    pollinations_model = _normalize_pollinations_text_model(data.get("pollinations_model"))
+    if pollinations_model:
+        session["pollinations_text_model"] = pollinations_model
+    elif provider_choice == "pollinations" and "pollinations_text_model" not in session:
+        session["pollinations_text_model"] = config.POLLINATIONS_TEXT_DEFAULT
     context = _generation_context()
     try:
         generated = generate_game(
@@ -345,6 +418,8 @@ def create_game_api():
             author_id=context["author_id"],
             author_username=context["author_username"],
             author_name=context["author_name"],
+            provider=context.get("provider"),
+            pollinations_model=context.get("pollinations_model"),
         )
     except ValueError as exc:
         _abort_json(400, str(exc), "invalid_request")
@@ -366,6 +441,20 @@ def tweak_game_api(game_id: str):
     instructions = (data.get("instructions") or "").strip()
     if len(instructions) < 4:
         _abort_json(400, "Опиши, что нужно изменить хотя бы в нескольких словах.", "invalid_request")
+    provider_raw = data.get("provider")
+    provider_choice: Optional[str] = None
+    if isinstance(provider_raw, str):
+        normalized = provider_raw.strip().lower()
+        provider_choice = _normalize_provider_choice(provider_raw)
+        if normalized in {"auto", "default", ""}:
+            session.pop("llm_provider", None)
+        elif provider_choice:
+            session["llm_provider"] = provider_choice
+    pollinations_model = _normalize_pollinations_text_model(data.get("pollinations_model"))
+    if pollinations_model:
+        session["pollinations_text_model"] = pollinations_model
+    elif provider_choice == "pollinations" and "pollinations_text_model" not in session:
+        session["pollinations_text_model"] = config.POLLINATIONS_TEXT_DEFAULT
     context = _generation_context()
     try:
         generated = tweak_game(
@@ -375,6 +464,8 @@ def tweak_game_api(game_id: str):
             author_id=context["author_id"],
             author_username=context["author_username"],
             author_name=context["author_name"],
+            provider=context.get("provider"),
+            pollinations_model=context.get("pollinations_model"),
         )
     except ValueError as exc:
         _abort_json(400, str(exc), "invalid_request")

@@ -29,7 +29,7 @@ async def autopost_job(context: CallbackContext):
         log.info(f"Autopost in chat {chat_id}")
         try:
             summary, model_used, _ = await asyncio.get_running_loop().run_in_executor(
-                None, llm_request, chat_id, [{"text": prompt}]
+                None, llm_request, chat_id, [{"text": prompt}], cfg.llm_provider or None
             )
             if summary:
                 model_display = model_used.replace("gemini-", "").replace("-latest", "").title()

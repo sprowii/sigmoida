@@ -57,6 +57,8 @@ def build_application(token: str, bot_username: str):
         "set_minmsgs": handlers.set_minmsgs,
         "set_msgsize": handlers.set_msgsize,
         "set_draw_model": handlers.set_draw_model,
+        "set_pollinations_text_model": handlers.set_pollinations_text_model,
+        "set_provider": handlers.set_provider,
     }
     for command, callback in command_handlers.items():
         app.add_handler(CommandHandler(command, callback))
