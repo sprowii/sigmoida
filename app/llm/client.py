@@ -518,7 +518,10 @@ def _summarize_history(chat_id: int) -> None:
     )
     summary_message = {"role": "user", "parts": [{"text": prompt_text}]}
 
-    for provider in _provider_sequence():
+    providers = _provider_sequence()
+    log.info("History summary provider order: %s", providers)
+
+    for provider in providers:
         try:
             if provider == "openrouter":
                 result = _send_openrouter_request([], summary_message)
