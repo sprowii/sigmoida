@@ -33,6 +33,21 @@ def _load_api_keys() -> List[str]:
     return keys
 
 
+def _load_openrouter_keys() -> List[str]:
+    keys: List[str] = []
+    base_key = os.getenv("OPENROUTER_API_KEY")
+    if base_key:
+        keys.append(base_key)
+    idx = 1
+    while True:
+        key = os.getenv(f"OPENROUTER_API_KEY_{idx}")
+        if not key:
+            break
+        keys.append(key)
+        idx += 1
+    return keys
+
+
 API_KEYS = _load_api_keys()
 if not API_KEYS:
     raise RuntimeError(
@@ -48,6 +63,24 @@ MODELS: List[str] = [
 ]
 
 IMAGE_MODEL_NAME = os.getenv("IMAGE_MODEL_NAME", "gemini-2.0-flash-preview-image")
+
+OPENROUTER_API_KEYS = _load_openrouter_keys()
+OPENROUTER_MODELS: List[str] = [
+    model.strip()
+    for model in os.getenv(
+        "OPENROUTER_MODELS",
+        "deepseek/deepseek-chat-v3-0324:free,deepseek/deepseek-r1-0528:free,tngtech/deepseek-r1t2-chimera:free",
+    ).split(",")
+    if model.strip()
+]
+OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL")
+OPENROUTER_SITE_NAME = os.getenv("OPENROUTER_SITE_NAME")
+OPENROUTER_TIMEOUT = float(os.getenv("OPENROUTER_TIMEOUT", "45"))
+LLM_PROVIDER_ORDER: List[str] = [
+    provider.strip().lower()
+    for provider in os.getenv("LLM_PROVIDER_ORDER", "gemini,openrouter").split(",")
+    if provider.strip()
+]
 
 POLLINATIONS_ENABLED = os.getenv("POLLINATIONS_ENABLED", "false").lower() in {"1", "true", "yes"}
 POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux")

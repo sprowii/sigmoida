@@ -12,6 +12,7 @@
 - Автопосты в группы (если включить)
 - Сохраняет историю и настройки в Redis
 - Форматирует ответы через HTML-теги Telegram
+- Может использовать как модели Google Gemini, так и модели через OpenRouter (DeepSeek и др.)
 
 ## Что нужно для запуска
 
@@ -48,6 +49,12 @@ GEMINI_API_KEY_1=первый_ключ_gemini
 GEMINI_API_KEY_2=второй_ключ_gemini
 REDIS_URL=redis://localhost:6379
 PORT=10000
+# Опционально: OpenRouter
+OPENROUTER_API_KEY=твой_openrouter_api_key
+OPENROUTER_MODELS=deepseek/deepseek-chat-v3-0324:free,deepseek/deepseek-r1-0528:free,tngtech/deepseek-r1t2-chimera:free
+OPENROUTER_SITE_URL=https://example.com
+OPENROUTER_SITE_NAME=Sigmoida
+LLM_PROVIDER_ORDER=gemini,openrouter
 ```
 
 4. Запусти:
@@ -58,7 +65,7 @@ python сигмоида.py
 
 ## Деплой на Render
 
-Короче, нужно как-то взять и засунуть в него этот репозиторий, ну, переменные окружения добавить, потом задеплоить - и всё
+В проекте есть `render.yaml` — создаёшь Blueprint-сервис, подключаешь репозиторий, прописываешь переменные окружения (включая ключи Gemini и, при необходимости, OpenRouter) и ждёшь деплой. Бесплатного тарифа достаточно для тестов.
 
 ## Команды бота
 

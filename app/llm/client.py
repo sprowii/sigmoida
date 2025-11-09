@@ -13,8 +13,14 @@ from app.config import (
     API_KEYS,
     BOT_PERSONA_PROMPT,
     IMAGE_MODEL_NAME,
+    LLM_PROVIDER_ORDER,
     MAX_HISTORY,
-    MODELS,
+    MODELS as GEMINI_MODELS,
+    OPENROUTER_API_KEYS,
+    OPENROUTER_MODELS,
+    OPENROUTER_SITE_NAME,
+    OPENROUTER_SITE_URL,
+    OPENROUTER_TIMEOUT,
     POLLINATIONS_BASE_URL,
     POLLINATIONS_ENABLED,
     POLLINATIONS_HEIGHT,
@@ -28,9 +34,15 @@ from app.state import history
 
 current_key_idx = 0
 current_model_idx = 0
-available_models: List[str] = MODELS.copy()
+available_models: List[str] = GEMINI_MODELS.copy()
 last_model_check_ts: float = 0.0
 _clients: Dict[int, genai.Client] = {}
+
+current_or_key_idx = 0
+current_or_model_idx = 0
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+SERVICE_UNAVAILABLE_DELAY = 2.0
 
 
 def _get_client(idx: int) -> genai.Client:
@@ -42,6 +54,98 @@ def _get_client(idx: int) -> genai.Client:
         client = genai.Client(api_key=API_KEYS[idx])
         _clients[idx] = client
     return client
+
+
+def _provider_sequence() -> List[str]:
+    preferred = [provider for provider in LLM_PROVIDER_ORDER if provider in {"gemini", "openrouter"}]
+    if not preferred:
+        preferred = ["gemini", "openrouter"]
+    sequence: List[str] = []
+    for provider in preferred:
+        if provider == "gemini" and API_KEYS and GEMINI_MODELS:
+            sequence.append("gemini")
+        if provider == "openrouter" and OPENROUTER_API_KEYS and OPENROUTER_MODELS:
+            sequence.append("openrouter")
+    if not sequence:
+        if API_KEYS:
+            sequence.append("gemini")
+        if OPENROUTER_API_KEYS and OPENROUTER_MODELS:
+            sequence.append("openrouter")
+    return sequence
+
+
+def _parts_to_text(parts: List[Dict[str, Any]]) -> str:
+    texts: List[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            text_val = part.get("text")
+            if text_val:
+                texts.append(str(text_val))
+    return "\n".join(texts).strip()
+
+
+def _message_has_inline_data(parts: List[Dict[str, Any]]) -> bool:
+    for part in parts:
+        if isinstance(part, dict) and ("inline_data" in part or "inlineData" in part):
+            return True
+    return False
+
+
+def _can_use_openrouter_message(message: Dict[str, Any]) -> bool:
+    parts = message.get("parts", [])
+    if _message_has_inline_data(parts):
+        return False
+    text = _parts_to_text(parts)
+    return bool(text.strip())
+
+
+def _prepare_openrouter_messages(
+    stored_history: List[Dict[str, Any]],
+    user_text: str,
+) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    if BOT_PERSONA_PROMPT:
+        messages.append({"role": "system", "content": BOT_PERSONA_PROMPT})
+    for message in stored_history:
+        parts = message.get("parts", [])
+        text = _parts_to_text(parts)
+        if not text:
+            continue
+        role = message.get("role", "user")
+        if role == "model":
+            role = "assistant"
+        elif role not in {"assistant", "system"}:
+            role = "user"
+        messages.append({"role": role, "content": text})
+    if user_text.strip():
+        messages.append({"role": "user", "content": user_text})
+    return messages
+
+
+def _openrouter_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        pieces: List[str] = []
+        for item in content:
+            if isinstance(item, dict) and "text" in item:
+                pieces.append(str(item["text"]))
+            elif isinstance(item, str):
+                pieces.append(item)
+        return "\n".join(pieces).strip()
+    if isinstance(content, dict):
+        return str(content.get("text", "")).strip()
+    return str(content).strip()
+
+
+def _is_service_unavailable_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "503" in text or "service unavailable" in text
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "rate limit" in text or "429" in text or "quota" in text
 
 
 def _to_base64(data: Any) -> str:
@@ -253,69 +357,35 @@ def _request_config() -> Dict[str, Any]:
         "tools": [
             {
                 "function_declarations": [
-                    {
-                        "name": "generate_image",
+                            {
+                                "name": "generate_image",
                         "description": "Generates an image from a text description. Use for explicit image requests.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "prompt": {
-                                    "type": "STRING",
-                                    "description": "The image description.",
-                                }
-                            },
-                            "required": ["prompt"],
-                        },
-                    }
-                ]
+                                "parameters": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "prompt": {
+                                            "type": "STRING",
+                                            "description": "The image description.",
+                                        }
+                                    },
+                                    "required": ["prompt"],
+                                },
+                            }
+                        ]
             }
         ],
     }
 
 
-def _summarize_history(chat_id: int) -> None:
-    chat_history = history.get(chat_id, [])
-    if len(chat_history) <= MAX_HISTORY:
-        return
-    log.info(f"Summarizing history for chat {chat_id}...")
-    conversation_text = _history_to_text(chat_history)
-    if not conversation_text:
-        history[chat_id] = chat_history[-MAX_HISTORY:]
-        return
-    prompt = (
-        "Summarize the following conversation in a concise paragraph for future context:\n"
-        f"{conversation_text}\nSummary:"
-    )
-    try:
-        client = _get_client(current_key_idx)
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            config={"system_instruction": {"parts": [{"text": BOT_PERSONA_PROMPT}]}}
-        )
-        summary_parts = _response_parts(response)
-        summary_text = _extract_text_from_parts(summary_parts)
-        if not summary_text:
-            raise ValueError("Empty summary response")
-        history[chat_id] = [
-            {"role": "user", "parts": [{"text": "Start of conversation."}]},
-            {"role": "model", "parts": [{"text": f"Previously discussed: {summary_text}"}]},
-        ]
-    except Exception as exc:
-        log.error(f"History summarization failed for chat {chat_id}: {exc}")
-        history[chat_id] = chat_history[-MAX_HISTORY:]
-
-
-def llm_request(chat_id: int, prompt_parts: List[Any]) -> Tuple[Optional[str], str, Optional[Any]]:
+def _send_gemini_request(
+    stored_history: List[Dict[str, Any]],
+    user_message: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
     global current_key_idx, current_model_idx
 
-    _summarize_history(chat_id)
-    stored_history = history.get(chat_id, [])
-    user_message = _normalize_prompt_parts(prompt_parts)
-
-    models_to_try = available_models if available_models else MODELS
-    if not models_to_try:
-        raise RuntimeError("Нет доступных моделей для запроса")
+    models_to_try = available_models if available_models else GEMINI_MODELS
+    if not models_to_try or not API_KEYS:
+        return None
 
     for model_offset in range(len(models_to_try)):
         model_idx = (current_model_idx + model_offset) % len(models_to_try)
@@ -334,21 +404,179 @@ def llm_request(chat_id: int, prompt_parts: List[Any]) -> Tuple[Optional[str], s
                 parts = _response_parts(response)
                 reply_text = _extract_text_from_parts(parts)
                 fn_call = _extract_function_call(parts)
-
-                # обновляем историю
-                new_history = stored_history + [user_message]
-                if parts:
-                    new_history.append({"role": "model", "parts": parts})
-                history[chat_id] = new_history
                 current_key_idx, current_model_idx = key_idx, model_idx
-                return reply_text if reply_text else None, model_name, fn_call
+                return {
+                    "parts": parts,
+                    "reply_text": reply_text,
+                    "fn_call": fn_call,
+                    "model_name": model_name,
+                    "provider": "gemini",
+                }
             except Exception as exc:
-                error_text = str(exc).lower()
-                if "rate limit" in error_text or "quota" in error_text:
-                    log.info(f"Rate limit on key {key_idx + 1}, model {model_name}. Trying next...")
-                else:
-                    log.warning(f"Request failed: key {key_idx + 1}, model {model_name}: {exc}")
-    raise Exception("All API keys/models failed")
+                if _is_service_unavailable_error(exc):
+                    log.warning(
+                        "Model service unavailable (key %s, model %s). Retrying after %.1fs...",
+                        key_idx + 1,
+                        model_name,
+                        SERVICE_UNAVAILABLE_DELAY,
+                    )
+                    time.sleep(SERVICE_UNAVAILABLE_DELAY)
+                    continue
+                if _is_rate_limit_error(exc):
+                    log.info("Rate limit on key %s, model %s. Trying next...", key_idx + 1, model_name)
+                    continue
+                log.warning("Request failed: key %s, model %s: %s", key_idx + 1, model_name, exc)
+    return None
+
+
+def _send_openrouter_request(
+    stored_history: List[Dict[str, Any]],
+    user_message: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    global current_or_key_idx, current_or_model_idx
+
+    if not OPENROUTER_API_KEYS or not OPENROUTER_MODELS:
+        return None
+    if not _can_use_openrouter_message(user_message):
+        return None
+
+    user_text = _parts_to_text(user_message.get("parts", []))
+    messages = _prepare_openrouter_messages(stored_history, user_text)
+
+    for model_offset in range(len(OPENROUTER_MODELS)):
+        model_idx = (current_or_model_idx + model_offset) % len(OPENROUTER_MODELS)
+        model_name = OPENROUTER_MODELS[model_idx]
+        for key_attempt in range(len(OPENROUTER_API_KEYS)):
+            key_idx = (current_or_key_idx + key_attempt) % len(OPENROUTER_API_KEYS)
+            api_key = OPENROUTER_API_KEYS[key_idx]
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            if OPENROUTER_SITE_URL:
+                headers["HTTP-Referer"] = OPENROUTER_SITE_URL
+            if OPENROUTER_SITE_NAME:
+                headers["X-Title"] = OPENROUTER_SITE_NAME
+            payload = {"model": model_name, "messages": messages}
+            try:
+                response = requests.post(
+                    OPENROUTER_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=OPENROUTER_TIMEOUT,
+                )
+                if response.status_code in {429, 503}:
+                    log.warning(
+                        "OpenRouter returned %s for model %s (key %s). Retrying after %.1fs...",
+                        response.status_code,
+                        model_name,
+                        key_idx + 1,
+                        SERVICE_UNAVAILABLE_DELAY,
+                    )
+                    time.sleep(SERVICE_UNAVAILABLE_DELAY)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                choices = data.get("choices") or []
+                if not choices:
+                    raise ValueError("OpenRouter response contains no choices")
+                message = choices[0].get("message") or {}
+                reply_text = _openrouter_content_to_text(message.get("content"))
+                if not reply_text:
+                    raise ValueError("OpenRouter response has empty content")
+                current_or_key_idx, current_or_model_idx = key_idx, model_idx
+                return {
+                    "parts": [{"text": reply_text}],
+                    "reply_text": reply_text,
+                    "fn_call": None,
+                    "model_name": f"openrouter:{model_name}",
+                    "provider": "openrouter",
+                }
+            except requests.RequestException as exc:
+                log.warning("OpenRouter request failed (model %s, key %s): %s", model_name, key_idx + 1, exc)
+                time.sleep(SERVICE_UNAVAILABLE_DELAY)
+                continue
+            except ValueError as exc:
+                log.warning("OpenRouter response error (model %s): %s", model_name, exc)
+                continue
+    return None
+
+
+def _summarize_history(chat_id: int) -> None:
+    chat_history = history.get(chat_id, [])
+    if len(chat_history) <= MAX_HISTORY:
+        return
+    log.info("Summarizing history for chat %s...", chat_id)
+    conversation_text = _history_to_text(chat_history)
+    if not conversation_text:
+        history[chat_id] = chat_history[-MAX_HISTORY:]
+        return
+
+    prompt_text = (
+        "Summarize the following conversation in a concise paragraph for future context:\n"
+        f"{conversation_text}\nSummary:"
+    )
+    summary_message = {"role": "user", "parts": [{"text": prompt_text}]}
+
+    for provider in _provider_sequence():
+        try:
+            if provider == "gemini":
+                result = _send_gemini_request([], summary_message)
+            elif provider == "openrouter":
+                result = _send_openrouter_request([], summary_message)
+            else:
+                continue
+
+            if not result:
+                continue
+
+            summary_text = result.get("reply_text") or ""
+            if not summary_text.strip():
+                raise ValueError("Empty summary response")
+
+            history[chat_id] = [
+                {"role": "user", "parts": [{"text": "Start of conversation."}]},
+                {"role": "model", "parts": [{"text": f"Previously discussed: {summary_text}"}]},
+            ]
+            log.info("Summary generated via %s", result.get("model_name"))
+            return
+        except Exception as exc:
+            log.warning("History summarization attempt via %s failed: %s", provider, exc)
+
+    log.error("History summarization failed for chat %s: all providers exhausted", chat_id)
+    history[chat_id] = chat_history[-MAX_HISTORY:]
+
+
+def llm_request(chat_id: int, prompt_parts: List[Any]) -> Tuple[Optional[str], str, Optional[Any]]:
+    _summarize_history(chat_id)
+    stored_history = history.get(chat_id, [])
+    user_message = _normalize_prompt_parts(prompt_parts)
+
+    for provider in _provider_sequence():
+        if provider == "gemini":
+            result = _send_gemini_request(stored_history, user_message)
+        elif provider == "openrouter":
+            result = _send_openrouter_request(stored_history, user_message)
+        else:
+            result = None
+
+        if not result:
+            continue
+
+        parts = result.get("parts") or []
+        reply_text = (result.get("reply_text") or "").strip()
+        fn_call = result.get("fn_call")
+        model_name = result.get("model_name", provider)
+
+        new_history = stored_history + [user_message]
+        if parts:
+            new_history.append({"role": "model", "parts": parts})
+        history[chat_id] = new_history
+
+        log.info("Response generated via %s", model_name)
+        return reply_text if reply_text else None, model_name, fn_call
+
+    raise Exception("All providers failed")
 
 
 def llm_generate_image(prompt: str) -> Tuple[Optional[bytes], str]:
@@ -442,7 +670,7 @@ def check_available_models() -> List[str]:
     global available_models, last_model_check_ts
     log.info("Checking available models...")
     working_models: List[str] = []
-    for model_name in MODELS:
+    for model_name in GEMINI_MODELS:
         for key_idx in range(len(API_KEYS)):
             try:
                 client = _get_client(key_idx)
@@ -453,9 +681,9 @@ def check_available_models() -> List[str]:
                 )
                 text = _extract_text_from_parts(_response_parts(response))
                 if text:
-                    working_models.append(model_name)
+                working_models.append(model_name)
                     log.info(f"Model {model_name} is available with key #{key_idx + 1}")
-                    break
+                break
             except Exception:
                 continue
     if working_models:
@@ -463,6 +691,6 @@ def check_available_models() -> List[str]:
         last_model_check_ts = time.time()
         log.info(f"Available models updated: {working_models}")
     else:
-        available_models = MODELS.copy()
+        available_models = GEMINI_MODELS.copy()
     return available_models
 
