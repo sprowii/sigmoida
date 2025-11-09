@@ -78,9 +78,18 @@ OPENROUTER_SITE_NAME = os.getenv("OPENROUTER_SITE_NAME")
 OPENROUTER_TIMEOUT = float(os.getenv("OPENROUTER_TIMEOUT", "45"))
 LLM_PROVIDER_ORDER: List[str] = [
     provider.strip().lower()
-    for provider in os.getenv("LLM_PROVIDER_ORDER", "gemini,openrouter,pollinations").split(",")
+    for provider in os.getenv("LLM_PROVIDER_ORDER", "openrouter,gemini,pollinations").split(",")
     if provider.strip()
 ]
+
+# Диагностика ключей
+log.info(f"Loaded {len(GEMINI_API_KEYS)} Gemini API keys")
+log.info(f"Loaded {len(OPENROUTER_API_KEYS)} OpenRouter API keys")
+log.info(f"Pollinations enabled: {POLLINATIONS_ENABLED}")
+log.info(f"LLM provider order: {LLM_PROVIDER_ORDER}")
+log.info(f"Gemini models: {MODELS}")
+log.info(f"OpenRouter models: {OPENROUTER_MODELS}")
+log.info(f"Pollinations text models: {POLLINATIONS_TEXT_MODELS}, default: {POLLINATIONS_TEXT_DEFAULT}")
 
 POLLINATIONS_ENABLED = os.getenv("POLLINATIONS_ENABLED", "false").lower() in {"1", "true", "yes"}
 POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux")
@@ -103,13 +112,13 @@ POLLINATIONS_TEXT_MODELS: List[str] = [
     model.strip()
     for model in os.getenv(
         "POLLINATIONS_TEXT_MODELS",
-        "openai,mistral,searchgpt,roblox",
+        "openai,mistral,searchgpt,roblox,roblox-rp",
     ).split(",")
     if model.strip()
 ]
 if not POLLINATIONS_TEXT_MODELS:
     POLLINATIONS_TEXT_MODELS = ["openai"]
-POLLINATIONS_TEXT_DEFAULT = os.getenv("POLLINATIONS_TEXT_DEFAULT", POLLINATIONS_TEXT_MODELS[0])
+POLLINATIONS_TEXT_DEFAULT = os.getenv("POLLINATIONS_TEXT_DEFAULT", "mistral")
 if POLLINATIONS_TEXT_DEFAULT not in POLLINATIONS_TEXT_MODELS:
     POLLINATIONS_TEXT_DEFAULT = POLLINATIONS_TEXT_MODELS[0]
 POLLINATIONS_TEXT_TIMEOUT = float(os.getenv("POLLINATIONS_TEXT_TIMEOUT", "45"))

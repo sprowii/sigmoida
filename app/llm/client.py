@@ -440,10 +440,12 @@ def _send_gemini_request(
     stored_history: List[Dict[str, Any]],
     user_message: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
+    log.info("Attempting Gemini request")
     global current_key_idx, current_model_idx
 
     models_to_try = available_models if available_models else GEMINI_MODELS
     if not models_to_try or not API_KEYS:
+        log.warning("No Gemini models or API keys available")
         return None
 
     for model_offset in range(len(models_to_try)):
@@ -492,9 +494,11 @@ def _send_openrouter_request(
     stored_history: List[Dict[str, Any]],
     user_message: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
+    log.info("Attempting OpenRouter request")
     global current_or_key_idx, current_or_model_idx
 
     if not OPENROUTER_API_KEYS or not OPENROUTER_MODELS:
+        log.warning("No OpenRouter API keys or models available")
         return None
     if not _can_use_openrouter_message(user_message):
         return None
@@ -566,7 +570,9 @@ def _send_pollinations_request(
     stored_history: List[Dict[str, Any]],
     user_message: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
+    log.info("Attempting Pollinations request")
     if not POLLINATIONS_TEXT_MODELS or not POLLINATIONS_TEXT_BASE_URL:
+        log.warning("Pollinations not configured properly")
         return None
     if not _can_use_openrouter_message(user_message):
         return None
@@ -574,6 +580,7 @@ def _send_pollinations_request(
     model_name = _pollinations_text_model_for_chat(chat_id)
     if model_name not in POLLINATIONS_TEXT_MODELS:
         model_name = POLLINATIONS_TEXT_MODELS[0]
+    log.info(f"Using Pollinations model: {model_name}")
 
     user_text = _parts_to_text(user_message.get("parts", []))
     messages = _prepare_openrouter_messages(stored_history, user_text)
@@ -585,11 +592,13 @@ def _send_pollinations_request(
     }
 
     try:
+        log.info(f"Sending Pollinations request with payload: {payload}")
         response = requests.post(
             POLLINATIONS_TEXT_BASE_URL,
             json=payload,
             timeout=POLLINATIONS_TEXT_TIMEOUT,
         )
+        log.info(f"Pollinations response status: {response.status_code}")
         if response.status_code in {429, 503}:
             log.warning(
                 "Pollinations returned %s for model %s. Retrying other providers...",
@@ -687,13 +696,14 @@ def llm_request(chat_id: int, prompt_parts: List[Any], provider_override: Option
     user_message = _normalize_prompt_parts(prompt_parts)
 
     for provider in _provider_sequence(preferred_provider):
+        log.info(f"Trying provider: {provider}")
         if provider == "gemini":
             result = _send_gemini_request(stored_history, user_message)
         elif provider == "openrouter":
             result = _send_openrouter_request(stored_history, user_message)
         elif provider == "pollinations":
             result = _send_pollinations_request(chat_id, stored_history, user_message)
-        else:
+                else:
             result = None
 
         if not result:
@@ -818,9 +828,9 @@ def check_available_models() -> List[str]:
                 )
                 text = _extract_text_from_parts(_response_parts(response))
                 if text:
-                    working_models.append(model_name)
+                working_models.append(model_name)
                     log.info("Model %s is available with key #%s", model_name, key_idx + 1)
-                    break
+                break
             except Exception:
                 continue
     if working_models:
