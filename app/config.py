@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.logging_config import log
+
 
 def _resolve_redis_url(raw_url: str) -> str:
     if ".upstash.io" in raw_url and raw_url.startswith("redis://"):
