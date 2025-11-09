@@ -8,7 +8,6 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Sequence
 
 import redis
-from google.generativeai.types import ContentType, PartType
 from telegram import User
 
 from app.config import (
@@ -33,7 +32,7 @@ except Exception as exc:
     raise RuntimeError("Не удалось подключиться к Redis") from exc
 
 
-def convert_part_to_dict(part: PartType):
+def convert_part_to_dict(part: Any):
     if hasattr(part, "inline_data") and getattr(part.inline_data, "data", None) is not None and getattr(
         part.inline_data, "mime_type", None
     ):
@@ -64,7 +63,7 @@ def convert_part_to_dict(part: PartType):
     return str(part)
 
 
-def convert_history_to_dict(history_item: ContentType):
+def convert_history_to_dict(history_item: Any):
     if hasattr(history_item, "role") and hasattr(history_item, "parts"):
         return {
             "role": history_item.role,
@@ -113,7 +112,7 @@ def _deserialize_part(part: Any):
 def load_data():
     log.info("Загрузка данных из Redis...")
     try:
-        loaded_history: Dict[int, List[ContentType]] = {}
+        loaded_history: Dict[int, List[Dict[str, Any]]] = {}
         for key in redis_client.scan_iter(match=f"{HISTORY_KEY_PREFIX}*"):
             chat_id_part = key.split(":", 1)[1]
             raw_value = redis_client.get(key)

@@ -2,8 +2,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from google.generativeai.types import ContentType
-
 
 @dataclass
 class ChatConfig:
@@ -16,7 +14,7 @@ class ChatConfig:
 
 
 configs: Dict[int, ChatConfig] = {}
-history: Dict[int, List[ContentType]] = {}
+history: Dict[int, List[Dict[str, Any]]] = {}
 user_profiles: Dict[int, Dict[int, Dict[str, Any]]] = {}
 
 
