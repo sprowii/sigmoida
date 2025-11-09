@@ -37,7 +37,7 @@ def _summarize_history(chat_id: int) -> None:
     try:
         genai.configure(api_key=API_KEYS[current_key_idx])
         summary_model = genai.GenerativeModel(
-            "gemini-2.5-flash-preview",
+            "gemini-2.0-flash",
             system_instruction=BOT_PERSONA_PROMPT,
         )
         summary_session = summary_model.start_chat(history=chat_history)

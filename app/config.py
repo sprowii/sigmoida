@@ -42,9 +42,9 @@ if not API_KEYS:
 MODELS: List[str] = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-preview",
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash-lite-preview",
+    "gemini-2.0-flash",
 ]
 
 IMAGE_MODEL_NAME = os.getenv("IMAGE_MODEL_NAME", "gemini-2.0-flash-preview-image")
