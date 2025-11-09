@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from google import genai
+from google.genai import types
 import requests
 
 from app.config import (
@@ -95,6 +96,8 @@ def _api_part(part: Dict[str, Any]) -> Dict[str, Any]:
         return {"text": str(part["text"])}
     if "function_call" in part:
         fn = part["function_call"]
+        if not fn or not fn.get("name"):
+            return {}
         return {
             "functionCall": {
                 "name": fn.get("name"),
@@ -102,6 +105,8 @@ def _api_part(part: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
     if "functionCall" in part:
+        if not part["functionCall"] or not part["functionCall"].get("name"):
+            return {}
         return part
     if "inline_data" in part:
         inline = part["inline_data"]
@@ -122,9 +127,14 @@ def _api_part(part: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _api_content(message: Dict[str, Any]) -> Dict[str, Any]:
+    formatted_parts: List[Dict[str, Any]] = []
+    for raw_part in message.get("parts", []):
+        mapped = _api_part(raw_part)
+        if mapped:
+            formatted_parts.append(mapped)
     return {
         "role": message.get("role", "user"),
-        "parts": [_api_part(part) for part in message.get("parts", [])] or [{"text": ""}],
+        "parts": formatted_parts or [{"text": ""}],
     }
 
 
@@ -134,7 +144,10 @@ def _part_from_any(part: Any) -> Dict[str, Any]:
         args = getattr(function_call, "args", {}) or {}
         if hasattr(args, "items"):
             args = dict(args)
-        return {"function_call": {"name": getattr(function_call, "name", ""), "args": args}}
+        name = getattr(function_call, "name", "")
+        if not name:
+            return {}
+        return {"function_call": {"name": name, "args": args}}
     if hasattr(part, "text"):
         return {"text": part.text}
     if hasattr(part, "inline_data"):
@@ -148,8 +161,12 @@ def _part_from_any(part: Any) -> Dict[str, Any]:
     if isinstance(part, dict):
         if "functionCall" in part:
             fc = part["functionCall"]
+            if not fc or not fc.get("name"):
+                return {}
             return {"function_call": {"name": fc.get("name"), "args": fc.get("args", {})}}
         if "function_call" in part:
+            if not part["function_call"] or not part["function_call"].get("name"):
+                return {}
             return {"function_call": part["function_call"]}
         if "inlineData" in part:
             inline = part["inlineData"]
@@ -189,7 +206,12 @@ def _response_parts(response: Any) -> List[Dict[str, Any]]:
         if parts is None and isinstance(content, dict):
             parts = content.get("parts", [])
         if parts:
-            return [_part_from_any(part) for part in parts]
+            cleaned_parts = []
+            for part in parts:
+                mapped = _part_from_any(part)
+                if mapped:
+                    cleaned_parts.append(mapped)
+            return cleaned_parts
     text = getattr(response, "text", None)
     if text:
         return [{"text": text}]
@@ -204,11 +226,14 @@ def _extract_text_from_parts(parts: List[Dict[str, Any]]) -> str:
 def _extract_function_call(parts: List[Dict[str, Any]]) -> Optional[SimpleNamespace]:
     for part in parts:
         fn = part.get("function_call")
-        if isinstance(fn, dict) and fn.get("name"):
+        if isinstance(fn, dict):
+            name = fn.get("name")
+            if not name:
+                continue
             args = fn.get("args") or {}
             if hasattr(args, "items"):
                 args = dict(args)
-            return SimpleNamespace(name=fn.get("name"), args=args)
+            return SimpleNamespace(name=name, args=args)
     return None
 
 
@@ -300,6 +325,7 @@ def llm_request(chat_id: int, prompt_parts: List[Any]) -> Tuple[Optional[str], s
             try:
                 client = _get_client(key_idx)
                 contents_payload = [_api_content(item) for item in stored_history + [user_message]]
+                contents_payload = [item for item in contents_payload if item.get("parts")]
                 response = client.models.generate_content(
                     model=model_name,
                     contents=contents_payload,
@@ -386,10 +412,14 @@ def _generate_image_via_gemini(client: genai.Client, model_name: str, prompt: st
         except Exception as exc:
             log.warning(f"Gemini image generation via images.generate failed: {exc}")
     try:
+        generate_config = types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=types.ImageConfig(aspect_ratio="1:1"),
+        )
         response = client.models.generate_content(
             model=model_name,
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            config={"response_mime_type": "image/png"},
+            config=generate_config,
         )
         parts = _response_parts(response)
         for part in parts:
