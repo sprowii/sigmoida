@@ -48,8 +48,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/set_interval &lt;сек&gt; – интервал автопоста (админ)\n"
         "/set_minmsgs &lt;n&gt; – минимум сообщений для автопоста (админ)\n"
         "/set_msgsize &lt;s|m|l&gt; – размер ответа (админ)\n"
-        "/draw <описание> – нарисовать изображение\n"
-        "/game <идея> – сгенерировать игру на Phaser через ИИ\n"
+        "/draw &lt;описание&gt; – нарисовать изображение\n"
+        "/game &lt;идея&gt; – сгенерировать игру на Phaser через ИИ\n"
         "/login – получить код для входа на сайт\n"
         "/reset – очистить историю диалога\n"
         "/privacy – политика конфиденциальности",
