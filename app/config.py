@@ -84,15 +84,6 @@ LLM_PROVIDER_ORDER: List[str] = [
     if provider.strip()
 ]
 
-# Диагностика ключей
-log.info(f"Loaded {len(GEMINI_API_KEYS)} Gemini API keys")
-log.info(f"Loaded {len(OPENROUTER_API_KEYS)} OpenRouter API keys")
-log.info(f"Pollinations enabled: {POLLINATIONS_ENABLED}")
-log.info(f"LLM provider order: {LLM_PROVIDER_ORDER}")
-log.info(f"Gemini models: {MODELS}")
-log.info(f"OpenRouter models: {OPENROUTER_MODELS}")
-log.info(f"Pollinations text models: {POLLINATIONS_TEXT_MODELS}, default: {POLLINATIONS_TEXT_DEFAULT}")
-
 POLLINATIONS_ENABLED = os.getenv("POLLINATIONS_ENABLED", "false").lower() in {"1", "true", "yes"}
 POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux")
 _pollinations_models_raw = os.getenv("POLLINATIONS_MODELS")
@@ -156,5 +147,14 @@ LOGIN_CODE_TTL_SECONDS = int(os.getenv("LOGIN_CODE_TTL_SECONDS", 10 * 60))
 
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "sig_session")
+
+# Диагностика ключей
+log.info(f"Loaded {len(API_KEYS)} Gemini API keys")
+log.info(f"Loaded {len(OPENROUTER_API_KEYS)} OpenRouter API keys")
+log.info(f"Pollinations enabled: {POLLINATIONS_ENABLED}")
+log.info(f"LLM provider order: {LLM_PROVIDER_ORDER}")
+log.info(f"Gemini models: {MODELS}")
+log.info(f"OpenRouter models: {OPENROUTER_MODELS}")
+log.info(f"Pollinations text models: {POLLINATIONS_TEXT_MODELS}, default: {POLLINATIONS_TEXT_DEFAULT}")
 
 
