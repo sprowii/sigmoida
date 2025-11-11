@@ -526,41 +526,53 @@ async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Код действителен 10 минут.",
         parse_mode=ParseMode.HTML,
     )
-async def set_openrouter_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await ensure_user_profile(update)
-    message = update.message
-    if not message:
+async def set_openrouter_model_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Устанавливает или показывает предпочитаемую модель OpenRouter.
+    При вызове без аргументов показывает текущее значение и список доступных моделей.
+    """
+    if not update.message or not update.effective_chat:
         return
+
     chat_id = update.effective_chat.id
-    cfg = get_cfg(chat_id)
-    available = OPENROUTER_MODELS
-    lookup = {model.lower(): model for model in available}
-    if not context.args:
-        current = cfg.openrouter_model or "по умолчанию (ротация)"
-        await message.reply_text(
-            "Текущая модель OpenRouter: <b>{}</b>\n"
-            "Доступные: {}\n"
-            "Команда: <code>/set_openrouter_model название_модели</code> или <code>/set_openrouter_model default</code> для сброса."
-            .format(html.escape(current), ", ".join(available)),
-            parse_mode=ParseMode.HTML,
+    args = context.args
+    
+    # ЕСЛИ КОМАНДА ВЫЗВАНА БЕЗ АРГУМЕНТОВ
+    if not args:
+        user_config = configs.get(chat_id)
+        # Безопасно получаем текущее значение
+        current_model = getattr(user_config, 'openrouter_model', 'по умолчанию (ротация)')
+        
+        # Формируем красивый список доступных моделей
+        available_models_text = "\n".join([f"• <code>{model}</code>" for model in OPENROUTER_MODELS])
+        
+        # Отправляем пользователю справку
+        await update.message.reply_html(
+            f"Текущая модель OpenRouter: <b>{current_model}</b>\n\n"
+            f"Чтобы изменить, используйте команду с названием модели, например:\n"
+            f"<code>/set_or_model {OPENROUTER_MODELS[0]}</code>\n\n"
+            f"<b>Доступные модели:</b>\n{available_models_text}"
         )
         return
-    raw_value = context.args[0].strip()
-    value_lower = raw_value.lower()
-    if value_lower in {"default", "reset"}:
-        cfg.openrouter_model = ""
-        await persist_chat_data(chat_id)
-        await message.reply_text("Модель OpenRouter сброшена. Теперь используется ротация по умолчанию.")
-        return
-    if value_lower not in lookup:
-        await message.reply_text(
-            "Неизвестная модель. Доступные варианты: {}".format(", ".join(available))
+
+    # Если аргумент есть, пытаемся его установить
+    chosen_model = args[0].strip()
+
+    if chosen_model not in OPENROUTER_MODELS:
+        await update.message.reply_html(
+            f"❌ <b>Ошибка:</b> Модель '<code>{chosen_model}</code>' не найдена в списке доступных.\n"
+            f"Используйте команду <code>/set_or_model</code> без параметров, чтобы увидеть список."
         )
         return
-    selected = lookup[value_lower]
-    cfg.openrouter_model = selected
-    await persist_chat_data(chat_id)
-    await message.reply_text(f"Для этого чата теперь используется OpenRouter модель: {selected}")
+
+    # Сохраняем выбор пользователя в Redis
+    user_config = configs.get(chat_id, default=SimpleNamespace())
+    user_config.openrouter_model = chosen_model
+    configs[chat_id] = user_config
+    
+    await update.message.reply_html(
+        f"✅ Готово! Ваша модель OpenRouter установлена на:\n<b>{chosen_model}</b>"
+    )
 
 async def game_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_profile(update)
