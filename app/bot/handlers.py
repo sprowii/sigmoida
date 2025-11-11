@@ -61,7 +61,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/draw &lt;описание&gt; – нарисовать изображение\n"
         f"/set_draw_model &lt;название&gt; – выбрать модель Pollinations ({html.escape(poll_models)})\n"
         f"/set_pollinations_text_model &lt;название&gt; – выбрать текстовую модель Pollinations ({html.escape(poll_text_models)})\n"
-        "/set_openrouter_model &lt;название&gt; – выбрать модель OpenRouter\n"
+        "/set_or_model &lt;название&gt; – выбрать модель OpenRouter\n"
         f"/set_provider &lt;gemini|openrouter|pollinations|auto&gt; – выбрать провайдера ответа ({provider_hint})\n"
         "/game &lt;идея&gt; – сгенерировать игру на Phaser через ИИ\n"
         "/login – получить код для входа на сайт (отправь /login боту)\n"
@@ -531,17 +531,18 @@ async def set_openrouter_model_handler(update: Update, context: ContextTypes.DEF
     Устанавливает или показывает предпочитаемую модель OpenRouter.
     При вызове без аргументов показывает текущее значение и список доступных моделей.
     """
+    await ensure_user_profile(update)
     if not update.message or not update.effective_chat:
         return
 
     chat_id = update.effective_chat.id
+    cfg = get_cfg(chat_id)
     args = context.args
     
     # ЕСЛИ КОМАНДА ВЫЗВАНА БЕЗ АРГУМЕНТОВ
     if not args:
-        user_config = configs.get(chat_id)
         # Безопасно получаем текущее значение
-        current_model = getattr(user_config, 'openrouter_model', 'по умолчанию (ротация)')
+        current_model = getattr(cfg, 'openrouter_model', 'по умолчанию (ротация)')
         
         # Формируем красивый список доступных моделей
         available_models_text = "\n".join([f"• <code>{model}</code>" for model in OPENROUTER_MODELS])
@@ -565,10 +566,9 @@ async def set_openrouter_model_handler(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # Сохраняем выбор пользователя в Redis
-    user_config = configs.get(chat_id, default=SimpleNamespace())
-    user_config.openrouter_model = chosen_model
-    configs[chat_id] = user_config
+    # Сохраняем выбор пользователя
+    cfg.openrouter_model = chosen_model
+    await persist_chat_data(chat_id)
     
     await update.message.reply_html(
         f"✅ Готово! Ваша модель OpenRouter установлена на:\n<b>{chosen_model}</b>"
