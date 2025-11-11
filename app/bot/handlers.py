@@ -9,6 +9,7 @@ from telegram.constants import ChatAction, ChatType, MessageEntityType, ParseMod
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from app import config
+from app.config import OPENROUTER_MODELS
 from app.llm.client import llm_generate_image, llm_request
 from app.logging_config import log
 from app.security.privacy import PRIVACY_POLICY_TEXT
@@ -60,6 +61,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/draw &lt;описание&gt; – нарисовать изображение\n"
         f"/set_draw_model &lt;название&gt; – выбрать модель Pollinations ({html.escape(poll_models)})\n"
         f"/set_pollinations_text_model &lt;название&gt; – выбрать текстовую модель Pollinations ({html.escape(poll_text_models)})\n"
+        "/set_openrouter_model &lt;название&gt; – выбрать модель OpenRouter\n"
         f"/set_provider &lt;gemini|openrouter|pollinations|auto&gt; – выбрать провайдера ответа ({provider_hint})\n"
         "/game &lt;идея&gt; – сгенерировать игру на Phaser через ИИ\n"
         "/login – получить код для входа на сайт (отправь /login боту)\n"
@@ -164,11 +166,17 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cfg = get_cfg(update.effective_chat.id)
     provider = cfg.llm_provider or "auto"
     pollinations_text = cfg.pollinations_text_model or config.POLLINATIONS_TEXT_DEFAULT
+    openrouter_model = cfg.openrouter_model or "ротация"
     provider_line = (
         f"<b>LLM:</b> {html.escape(provider)}"
         + (
             f" (Pollinations → {html.escape(pollinations_text)})"
             if provider == "pollinations" and pollinations_text
+            else ""
+        )
+        + (
+            f" (OpenRouter → {html.escape(openrouter_model)})"
+            if provider == "openrouter"
             else ""
         )
     )
@@ -518,6 +526,42 @@ async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Код действителен 10 минут.",
         parse_mode=ParseMode.HTML,
     )
+async def set_openrouter_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await ensure_user_profile(update)
+    message = update.message
+    if not message:
+        return
+    chat_id = update.effective_chat.id
+    cfg = get_cfg(chat_id)
+    available = OPENROUTER_MODELS
+    lookup = {model.lower(): model for model in available}
+    if not context.args:
+        current = cfg.openrouter_model or "по умолчанию (ротация)"
+        await message.reply_text(
+            "Текущая модель OpenRouter: <b>{}</b>\n"
+            "Доступные: {}\n"
+            "Команда: <code>/set_openrouter_model название_модели</code> или <code>/set_openrouter_model default</code> для сброса."
+            .format(html.escape(current), ", ".join(available)),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    raw_value = context.args[0].strip()
+    value_lower = raw_value.lower()
+    if value_lower in {"default", "reset"}:
+        cfg.openrouter_model = ""
+        await persist_chat_data(chat_id)
+        await message.reply_text("Модель OpenRouter сброшена. Теперь используется ротация по умолчанию.")
+        return
+    if value_lower not in lookup:
+        await message.reply_text(
+            "Неизвестная модель. Доступные варианты: {}".format(", ".join(available))
+        )
+        return
+    selected = lookup[value_lower]
+    cfg.openrouter_model = selected
+    await persist_chat_data(chat_id)
+    await message.reply_text(f"Для этого чата теперь используется OpenRouter модель: {selected}")
+
 async def game_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_profile(update)
     message = update.message

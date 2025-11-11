@@ -209,6 +209,20 @@ def _openai_content_to_text(content: Any) -> str:
     return str(content).strip()
 
 
+def _openrouter_model_for_chat(chat_id: Optional[int]) -> Optional[str]:
+    """Возвращает предпочтительную модель OpenRouter для пользователя, если она задана и валидна."""
+    if chat_id is None:
+        return None
+
+    cfg = configs.get(chat_id)
+    if cfg:
+        preferred_model = getattr(cfg, "openrouter_model", None)
+        if preferred_model and preferred_model in OPENROUTER_MODELS:
+            return preferred_model
+
+    return None
+
+
 def _is_service_unavailable_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "503" in text or "service unavailable" in text
@@ -495,7 +509,7 @@ def _send_gemini_request(
                     contents=contents_payload,
                     config=_request_config(),
                 )
-                
+                log.info(f"RAW GEMINI RESPONSE: {response}")
                 parts = _response_parts(response)
                 reply_text = _extract_text_from_parts(parts)
                 fn_call = _extract_function_call(parts)
@@ -531,6 +545,7 @@ def _send_gemini_request(
 
 
 def _send_openrouter_request(
+    chat_id: Optional[int],
     stored_history: List[Dict[str, Any]],
     user_message: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
@@ -540,7 +555,7 @@ def _send_openrouter_request(
     if not OPENROUTER_API_KEYS or not OPENROUTER_MODELS:
         log.warning("No OpenRouter API keys or models available")
         return None
-    
+
     if not _can_use_text_only_provider(user_message):
         log.info("Message contains non-text content, skipping OpenRouter")
         return None
@@ -548,14 +563,25 @@ def _send_openrouter_request(
     user_text = _parts_to_text(user_message.get("parts", []))
     messages = _prepare_openai_compatible_messages(stored_history, user_text)
 
-    for model_offset in range(len(OPENROUTER_MODELS)):
-        model_idx = (current_or_model_idx + model_offset) % len(OPENROUTER_MODELS)
-        model_name = OPENROUTER_MODELS[model_idx]
-        
+    # Логика выбора модели
+    models_to_iterate: List[str]
+    preferred_model = _openrouter_model_for_chat(chat_id)
+
+    if preferred_model:
+        models_to_iterate = [preferred_model]
+        log.info(f"Using user-preferred OpenRouter model for chat {chat_id}: {preferred_model}")
+    else:
+        # Стандартная ротация (round-robin), если модель не выбрана
+        models_to_iterate = [
+            OPENROUTER_MODELS[(current_or_model_idx + i) % len(OPENROUTER_MODELS)]
+            for i in range(len(OPENROUTER_MODELS))
+        ]
+
+    for model_name in models_to_iterate:
         for key_attempt in range(len(OPENROUTER_API_KEYS)):
             key_idx = (current_or_key_idx + key_attempt) % len(OPENROUTER_API_KEYS)
             api_key = OPENROUTER_API_KEYS[key_idx]
-            
+
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -564,9 +590,9 @@ def _send_openrouter_request(
                 headers["HTTP-Referer"] = OPENROUTER_SITE_URL
             if OPENROUTER_SITE_NAME:
                 headers["X-Title"] = OPENROUTER_SITE_NAME
-            
+
             payload = {"model": model_name, "messages": messages}
-            
+
             try:
                 response = requests.post(
                     OPENROUTER_URL,
@@ -574,7 +600,7 @@ def _send_openrouter_request(
                     headers=headers,
                     timeout=OPENROUTER_TIMEOUT,
                 )
-                
+
                 if response.status_code in {429, 503}:
                     log.warning(
                         "OpenRouter returned %s for model %s (key %s). Retrying after %.1fs...",
@@ -585,22 +611,31 @@ def _send_openrouter_request(
                     )
                     time.sleep(SERVICE_UNAVAILABLE_DELAY)
                     continue
-                
+
                 response.raise_for_status()
                 data = response.json()
                 choices = data.get("choices") or []
-                
+
                 if not choices:
                     raise ValueError("OpenRouter response contains no choices")
-                
+
                 message = choices[0].get("message") or {}
                 reply_text = _openai_content_to_text(message.get("content"))
-                
+
                 if not reply_text:
                     raise ValueError("OpenRouter response has empty content")
-                
-                current_or_key_idx, current_or_model_idx = key_idx, model_idx
-                
+
+                # Обновляем глобальные индексы
+                current_or_key_idx = key_idx
+                # Обновляем индекс модели, только если это была ротация, а не выбор пользователя
+                if not preferred_model:
+                    try:
+                        successful_model_index = OPENROUTER_MODELS.index(model_name)
+                        current_or_model_idx = successful_model_index
+                    except ValueError:
+                        # Модель не найдена в списке, ничего не делаем с индексом
+                        pass
+
                 return {
                     "parts": [{"text": reply_text}],
                     "reply_text": reply_text,
@@ -608,7 +643,7 @@ def _send_openrouter_request(
                     "model_name": f"openrouter:{model_name}",
                     "provider": "openrouter",
                 }
-                
+
             except requests.RequestException as exc:
                 log.warning("OpenRouter request failed (model %s, key %s): %s", model_name, key_idx + 1, exc)
                 time.sleep(SERVICE_UNAVAILABLE_DELAY)
@@ -616,7 +651,7 @@ def _send_openrouter_request(
             except ValueError as exc:
                 log.warning("OpenRouter response error (model %s): %s", model_name, exc)
                 continue
-    
+
     return None
 
 
@@ -735,7 +770,7 @@ def _summarize_history(chat_id: int, provider_override: Optional[str] = None) ->
             if provider == "gemini":
                 result = _send_gemini_request([], summary_message)
             elif provider == "openrouter":
-                result = _send_openrouter_request([], summary_message)
+                result = _send_openrouter_request(chat_id, [], summary_message)
             elif provider == "pollinations":
                 result = _send_pollinations_request(chat_id, [], summary_message)
 
@@ -777,7 +812,7 @@ def llm_request(
             if provider == "gemini":
                 result = _send_gemini_request(stored_history, user_message)
             elif provider == "openrouter":
-                result = _send_openrouter_request(stored_history, user_message)
+                result = _send_openrouter_request(chat_id, stored_history, user_message)
             elif provider == "pollinations":
                 result = _send_pollinations_request(chat_id, stored_history, user_message)
         except Exception as exc:
