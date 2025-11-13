@@ -23,6 +23,10 @@ const PROGRESS_PHRASES = [
     "🎵 Подключаем эффекты и звук...",
     "🕹️ Настраиваем управление и физику...",
     "🧪 Проверяем синтаксис и безопасность...",
+    "пэм пэм пэм пэм пэм пэм пэм",
+    "быстрее",
+    "типа друн уже умеп",
+    "знаю, что это как-то долговато, но типа жизнь не справедлива"
 ];
 
 let progressIntervalId = null;
@@ -189,7 +193,7 @@ function startGeneratorProgress(initialMessage = PROGRESS_PHRASES[0]) {
     }
     elements.generatorStatus.classList.remove("error", "success");
     elements.generatorStatus.classList.add("loading");
-    elements.generatorStatus.innerHTML = initialMessage;
+    elements.generatorStatus.textContent = initialMessage;
     const startIndex = PROGRESS_PHRASES.indexOf(initialMessage);
     progressStep = startIndex >= 0 ? startIndex : -1;
     progressIntervalId = window.setInterval(() => {
@@ -197,7 +201,7 @@ function startGeneratorProgress(initialMessage = PROGRESS_PHRASES[0]) {
             return;
         }
         progressStep = (progressStep + 1) % PROGRESS_PHRASES.length;
-        elements.generatorStatus.innerHTML = PROGRESS_PHRASES[progressStep];
+        elements.generatorStatus.textContent = PROGRESS_PHRASES[progressStep];
     }, 2200);
 }
 
@@ -211,7 +215,7 @@ function stopGeneratorProgress() {
     }
 }
 
-function setGenerating(isGenerating, message = "", variant = "info") {
+function setGenerating(isGenerating, message = "", variant = "info", linkUrl = null, linkText = null) {
     state.generating = isGenerating;
     if (elements.generatorSubmit) {
         elements.generatorSubmit.disabled = isGenerating;
@@ -219,6 +223,8 @@ function setGenerating(isGenerating, message = "", variant = "info") {
     if (!elements.generatorStatus) {
         return;
     }
+    const statusEl = elements.generatorStatus;
+
     if (isGenerating) {
         const startingMessage = message || PROGRESS_PHRASES[0];
         startGeneratorProgress(startingMessage);
@@ -226,16 +232,27 @@ function setGenerating(isGenerating, message = "", variant = "info") {
     }
 
     stopGeneratorProgress();
-    elements.generatorStatus.classList.remove("error", "success");
+    statusEl.classList.remove("error", "success");
+    statusEl.textContent = "";
+
     if (message) {
-        elements.generatorStatus.innerHTML = message;
-    } else {
-        elements.generatorStatus.textContent = "";
+        if (linkUrl) {
+            const textNode = document.createTextNode(message + " ");
+            const link = document.createElement("a");
+            link.href = linkUrl;
+            link.textContent = linkText || "Открыть игру";
+            link.target = "_blank";
+            link.rel = "noopener";
+            statusEl.append(textNode, link);
+        } else {
+            statusEl.textContent = message;
+        }
     }
+
     if (variant === "error") {
-        elements.generatorStatus.classList.add("error");
+        statusEl.classList.add("error");
     } else if (variant === "success") {
-        elements.generatorStatus.classList.add("success");
+        statusEl.classList.add("success");
     }
 }
 
@@ -299,12 +316,20 @@ function renderGames(games, reset = false) {
         const clone = elements.gameTemplate.content.cloneNode(true);
         clone.querySelector(".game-title").textContent = game.title || "Без названия";
         clone.querySelector(".game-summary").textContent = game.summary || "Описание будет готово позже.";
-        clone.querySelector(".game-model").textContent = game.model ? `Модель: ${game.model}` : "";
-        clone.querySelector(".game-author").textContent = `Автор: ${formatAuthor(game.author)}`;
+        const modelSpan = clone.querySelector(".game-model");
+        if (game.model) {
+            modelSpan.textContent = `Модель · ${game.model}`;
+        } else {
+            modelSpan.textContent = "Модель · неизвестна";
+        }
+        const authorSpan = clone.querySelector(".game-author");
+        authorSpan.textContent = `Автор · ${formatAuthor(game.author)}`;
         clone.querySelector(".game-time").textContent = formatDate(game.created_at);
+
         const playLink = clone.querySelector("a.button.primary");
         const shareUrl = game.share_url || `/webapp/sandbox.html?game_id=${encodeURIComponent(game.id)}`;
         playLink.href = shareUrl;
+
         const copyBtn = clone.querySelector("button[data-copy]");
         copyBtn.addEventListener("click", async () => {
             try {
@@ -317,6 +342,7 @@ function renderGames(games, reset = false) {
                 setTimeout(() => (copyBtn.textContent = "Скопировать ссылку"), 1500);
             }
         });
+
         const tweakBtn = clone.querySelector("button[data-tweak]");
         if (tweakBtn) {
             const userCanTweak = canTweakGame(game);
@@ -624,8 +650,13 @@ async function handleGeneratorSubmit(event) {
         const data = await response.json();
         const game = data.game;
         elements.generatorTextarea.value = "";
-        const link = game && game.share_url ? `<a href="${game.share_url}">Открыть игру</a>` : "";
-        setGenerating(false, `Готово! ${game?.title || "Новая игра"}. ${link}`, "success");
+        const url = game && game.share_url ? game.share_url : null;
+        const title = game?.title || "Новая игра";
+        if (url) {
+            setGenerating(false, `Готово! ${title}.`, "success", url, "Открыть игру");
+        } else {
+            setGenerating(false, `Готово! ${title}.`, "success");
+        }
         await loadGames({ reset: true });
     } catch (error) {
         console.error("generate failed", error);
@@ -793,6 +824,39 @@ function bindEvents() {
     setupKeyboardDismissers();
 }
 
+function setupScrollSpy() {
+    const sections = [
+        "home",
+        "create",
+        "catalog",
+        "about",
+        "description",
+        "privacy",
+    ].map(id => document.getElementById(id))
+     .filter(Boolean);
+
+    const navLinks = Array.from(document.querySelectorAll(".nav-pill a"));
+
+    if (!sections.length || !navLinks.length) return;
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            const id = entry.target.id;
+            navLinks.forEach(link => {
+                const href = link.getAttribute("href") || "";
+                const targetId = href.startsWith("#") ? href.slice(1) : null;
+                link.classList.toggle("active", targetId === id);
+            });
+        });
+    }, {
+        root: null,
+        threshold: 0.5,
+    });
+
+    sections.forEach(section => observer.observe(section));
+}
+
 async function bootstrap() {
     bindEvents();
     await loadModelMetadata();
@@ -801,6 +865,7 @@ async function bootstrap() {
     await fetchSession();
     updateChips();
     await loadGames({ reset: true });
+    setupScrollSpy();
 }
 
 bootstrap().catch((error) => {

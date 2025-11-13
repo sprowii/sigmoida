@@ -4,13 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Сигмоида · Игровая песочница</title>
-    <meta name="description" content="Запускайте Phaser-игры, созданные нейросетью Сигмоида." />
+    <meta name="description" content="Запускайте 2D и 3D игры, созданные нейросетью Сигмоида в безопасной песочнице." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/webapp/hub.css" />
     <link rel="stylesheet" href="/webapp/sandbox.css" />
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
 </head>
 <body>
     <div class="background-glow"></div>
@@ -22,13 +21,21 @@
             </nav>
             <div class="sandbox-hero">
                 <h1>Игровая песочница</h1>
-                <p>Сюда попадают игры, которые Сигмоида собирает из идей пользователей. Поделись ссылкой, пока игра хранится в песочнице.</p>
+                <p>Игры запускаются в изолированном окне: нейросеть пишет код, а браузер исполняет 2D или 3D сцену внутри безопасного iframe.</p>
             </div>
         </header>
         <main class="sandbox-main">
             <section class="panel sandbox-panel">
                 <div class="sandbox-status" id="status" role="status" aria-live="polite">Загружаем игру...</div>
-                <div class="sandbox-stage" id="game-container" aria-label="Игровое поле"></div>
+                <div class="sandbox-stage" aria-label="Игровое поле">
+                    <iframe
+                        id="game-frame"
+                        class="sandbox-frame"
+                        title="Игровая песочница"
+                        sandbox="allow-scripts"
+                        referrerpolicy="no-referrer"
+                    ></iframe>
+                </div>
             </section>
         </main>
         <footer class="sandbox-footer">

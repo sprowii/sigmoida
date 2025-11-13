@@ -1,5 +1,5 @@
 # Copyright (c) 2025 sprouee
-"""Utilities that orchestrate AI-driven generation of Phaser games."""
+"""Utilities that orchestrate AI-driven generation of sandbox games (2D/3D)."""
 
 from __future__ import annotations
 
@@ -19,65 +19,307 @@ from app.logging_config import log
 from app.storage.redis_store import store_game_payload
 from app.state import ChatConfig, configs
 
+# === НОВЫЙ ПРОМПТ ДЛЯ ДВИЖКА 2D/3D В ПЕСОЧНИЦЕ ===
+
 PROMPT_TEMPLATE = (
     """
-    Ты — генератор игр на Phaser 3, работающий в песочнице Telegram WebApps.
-    Код игры выполняется как `(async function(Phaser, sandbox) {{ ... }})`.
+You are a JavaScript game generator for the Sigmoida Game Sandbox.
 
-    Требования к выходному коду:
-    1. Используй чистый JavaScript (ES6). Без `import`, `export`, `require` и внешних HTML/CSS.
-    2. Не используй `eval`, `new Function`, `document.cookie`, `localStorage`, `sessionStorage`, `window.parent/top/opener`.
-    3. Инициализируй игру через `new Phaser.Game({{...}})`, обязательно укажи `parent: sandbox.getContainer()`.
-    4. Информируй игрока с помощью `sandbox.setStatus(...)` во время загрузки ресурсов и `sandbox.clearStatus()` после готовности.
-    5. Можно использовать встроенные графические примитивы Phaser или публичные HTTPS-ресурсы.
-    6. Финальный код должен быть полностью самодостаточным и готовым к выполнению.
+The game code you produce will be:
+- inserted into a wrapper and executed inside a sandboxed iframe,
+- not allowed to access window, document, localStorage, sessionStorage, indexedDB, eval, new Function, importScripts, Worker, SharedWorker, or <script> tags.
 
-    Тебе дана идея игры: «{idea}».
+🔥 IMPORTANT:
+Your entire answer MUST be a single JSON object, without Markdown, comments, or extra text.
+Use this structure:
 
-    Ответь JSON-объектом без дополнительных комментариев и форматирования Markdown.
-    Структура JSON:
-    {{
-      "title": "Короткое название игры",
-      "summary": "Краткое описание механики",
-      "code": "Полный JavaScript-код игры"
-    }}
+{{
+  "title": "Short game title",
+  "summary": "Short description of the mechanics (1–3 sentences, in Russian)",
+  "code": "JavaScript code as a single string"
+}}
 
-    Значение "code" должно быть строкой с экранированными переводами строк (используй `\n`).
-    Не добавляй ничего кроме указанного JSON.
+The "code" value must be a string with escaped newlines (use \\n), valid JavaScript.
+
+### GAME ENGINE API
+
+Your code will be inserted into a wrapper and executed.
+You MUST end your code with exactly one `return` statement that returns a function.
+
+You have three allowed signatures:
+
+1) 2D-only game:
+
+```js
+return function run2D(create2D) {{
+    // your 2D game code here
+}};
+```
+
+2) 3D-only game:
+
+```js
+return function run3D(create3D) {{
+    // your 3D game code here
+}};
+```
+
+3) Flexible game (decides 2D/3D itself):
+
+```js
+return function run(create2D, create3D) {{
+    // choose whether to call create2D() or create3D()
+}};
+```
+
+The engine will call this returned function automatically.
+
+#### 2D API: create2D()
+
+```js
+const {{ canvas, ctx, utils }} = create2D();
+```
+
+- `canvas`: HTMLCanvasElement
+- `ctx`: 2D rendering context (CanvasRenderingContext2D)
+- `utils` has:
+
+```ts
+utils.onFrame(cb: (timeMs: number) => void): () => void;
+utils.onResize(cb: (width: number, height: number) => void): () => void;
+utils.clear(): void;
+utils.random(): number;
+utils.now(): number;
+```
+
+Use `utils.onFrame` to update the game each frame, and draw via `ctx`.
+
+Example skeleton:
+
+```js
+return function run2D(create2D) {{
+    const {{ canvas, ctx, utils }} = create2D();
+
+    utils.onFrame((timeMs) => {{
+        const t = timeMs / 1000;
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#111827";
+        ctx.fillRect(0, 0, w, h);
+
+        const radius = Math.min(w, h) * 0.08;
+        const cx = (Math.sin(t) * 0.8 + 0.5) * w;
+        const cy = h * 0.5;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = "#8b5cf6";
+        ctx.fill();
+    }});
+}};
+```
+
+#### 3D API: create3D()
+
+```js
+const {{ THREE, scene, camera, renderer, utils }} = create3D();
+```
+
+- `THREE`: Three.js namespace.
+- `scene`: THREE.Scene.
+- `camera`: THREE.PerspectiveCamera.
+- `renderer`: THREE.WebGLRenderer.
+- `utils` has:
+
+```ts
+utils.onFrame(cb: (timeSeconds: number) => void): () => void;
+utils.addAmbientLight(intensity?: number): THREE.AmbientLight;
+utils.addDirectionalLight(
+  intensity?: number,
+  position?: {{ x: number; y: number; z: number }}
+): THREE.DirectionalLight;
+utils.loadTexture(url: string): Promise<THREE.Texture>;
+utils.loadModel(url: string): Promise<THREE.Object3D>;
+utils.random(): number;
+utils.now(): number;
+```
+
+Example skeleton (textured cube):
+
+```js
+return function run3D(create3D) {{
+    const {{ THREE, scene, camera, renderer, utils }} = create3D();
+
+    utils.addAmbientLight(0.4);
+    utils.addDirectionalLight(1.2, {{ x: 3, y: 5, z: 2 }});
+
+    (async () => {{
+        const texture = await utils.loadTexture("https://threejs.org/examples/textures/crate.gif");
+
+        const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+        const material = new THREE.MeshStandardMaterial({{ map: texture }});
+        const cube = new THREE.Mesh(geometry, material);
+        scene.add(cube);
+
+        camera.position.set(0, 1.5, 4);
+        camera.lookAt(cube.position);
+
+        utils.onFrame((time) => {{
+            cube.rotation.x = time * 0.6;
+            cube.rotation.y = time * 0.9;
+        }});
+    }})();
+}};
+```
+
+### HARD RESTRICTIONS
+
+Your code MUST NOT:
+- reference `window`, `document`, `parent`, `top`, `opener`,
+- use `localStorage`, `sessionStorage`, `indexedDB`,
+- call `eval`, `Function`, `new Function`,
+- use `importScripts`, `Worker`, `SharedWorker`,
+- insert `<script>` tags.
+
+If you try to use any of the above, the code will be rejected.
+
+### TASK
+
+User's game idea (in Russian):
+
+«{idea}»
+
+Generate a JSON object with fields: "title", "summary", "code".
+
+- "title": short Russian title of the game.
+- "summary": short Russian description of the game mechanic.
+- "code": JavaScript code as a single string (with \\n), following the API and restrictions above.
+
+Do NOT output anything except this JSON object.
     """
 )
 
 TWEAK_PROMPT_TEMPLATE = (
     """
-    Ты — генератор и редактор игр на Phaser 3.
-    Тебе дан исходный код игры и запрос пользователя на изменения.
+You are a JavaScript game generator and editor for the Sigmoida Game Sandbox.
 
-    Исходная идея:
-    «{idea}»
+The game engine is the same as described below, and runs inside a sandboxed iframe.
+You are given the current game code, its idea/summary, and a user request to modify it.
 
-    Пояснение/описание:
-    «{summary}»
+You must return ONLY a JSON object with fields: "title", "summary", "code".
 
-    Текущий код:
-    ```javascript
-    {code}
-    ```
+### ENGINE API (REMINDER)
 
-    Запрос пользователя:
-    «{instructions}»
+- Your code is inserted into a wrapper and executed.
+- You MUST end your code with exactly one `return` statement that returns a function:
 
-    Требования:
-    1. Верни обновлённый JavaScript-код игры, полностью готовый к запуску.
-    2. Сохрани рабочую игру (никаких синтаксических ошибок).
-    3. Не используй eval, new Function и доступ к чувствительным API.
-    4. Не удаляй parent: sandbox.getContainer() и не меняй базовую инициализацию Phaser.
+Allowed forms:
 
-    Ответь JSON-объектом:
-    {{
-      "title": "Название (можно оставить прежним)",
-      "summary": "Краткое описание изменений",
-      "code": "Обновлённый JavaScript-код"
-    }}
+1) 2D-only:
+
+```js
+return function run2D(create2D) {{
+    // ...
+}};
+```
+
+2) 3D-only:
+
+```js
+return function run3D(create3D) {{
+    // ...
+}};
+```
+
+3) Flexible:
+
+```js
+return function run(create2D, create3D) {{
+    // ...
+}};
+```
+
+`create2D()` returns:
+
+```ts
+{{
+    canvas: HTMLCanvasElement;
+    ctx: CanvasRenderingContext2D;
+    utils: {{
+        onFrame(cb: (timeMs: number) => void): () => void;
+        onResize(cb: (width: number, height: number) => void): () => void;
+        clear(): void;
+        random(): number;
+        now(): number;
+    }};
+}}
+```
+
+`create3D()` returns:
+
+```ts
+{{
+    THREE: typeof import("three");
+    scene: THREE.Scene;
+    camera: THREE.PerspectiveCamera;
+    renderer: THREE.WebGLRenderer;
+    utils: {{
+        onFrame(cb: (timeSeconds: number) => void): () => void;
+        addAmbientLight(intensity?: number): THREE.AmbientLight;
+        addDirectionalLight(
+            intensity?: number,
+            position?: {{ x: number; y: number; z: number }}
+        ): THREE.DirectionalLight;
+        loadTexture(url: string): Promise<THREE.Texture>;
+        loadModel(url: string): Promise<THREE.Object3D>;
+        random(): number;
+        now(): number;
+    }};
+}}
+```
+
+HARD RESTRICTIONS:
+- Do NOT use window, document, parent, top, opener.
+- Do NOT use localStorage, sessionStorage, indexedDB.
+- Do NOT call eval, Function, new Function.
+- Do NOT use importScripts, Worker, SharedWorker.
+- Do NOT insert <script> tags.
+- Do NOT use ES module syntax (no import/export).
+
+### BASE INFO
+
+Original idea:
+«{idea}»
+
+Original summary:
+«{summary}»
+
+Current code:
+```javascript
+{code}
+```
+
+User modification request:
+«{instructions}»
+
+### REQUIREMENTS
+
+1. Return updated, fully working JavaScript game code compatible with the API above.
+2. Preserve a playable game; do NOT introduce syntax errors.
+3. Keep the same engine concept (2D or 3D) unless the user explicitly wants a different one.
+4. Respect the security restrictions.
+
+### OUTPUT FORMAT
+
+Return ONLY a JSON object:
+
+{{
+  "title": "Game title (can be the same or updated, in Russian)",
+  "summary": "Short Russian description of changes/mechanics",
+  "code": "Updated JavaScript code as a single string with \\n"
+}}
     """
 )
 
