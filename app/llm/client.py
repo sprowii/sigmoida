@@ -1,5 +1,6 @@
 ﻿# Copyright (c) 2025 sprouee
 import base64
+import re
 import random
 import time
 import urllib.parse
@@ -463,6 +464,36 @@ def _request_config() -> Dict[str, Any]:
     return config
 
 
+def _is_quality_response(reply_text: str) -> bool:
+    """Проверяет, является ли ответ качественным (не пустой, не только HTML-теги)."""
+    if not reply_text or not reply_text.strip():
+        return False
+    
+    # Убираем HTML-теги и проверяем, остался ли реальный текст
+    text_without_tags = re.sub(r'<[^>]+>', '', reply_text).strip()
+    
+    # Если после удаления тегов ничего не осталось или очень мало символов
+    if len(text_without_tags) < 3:
+        return False
+    
+    # Если ответ состоит только из пустых HTML-тегов типа <u></u>, <b></b> и т.д.
+    if re.match(r'^<[^>]*></[^>]*>$', reply_text.strip()):
+        return False
+    
+    return True
+
+
+def _prioritize_models(models: List[str]) -> List[str]:
+    """Переупорядочивает модели, чтобы gemini-2.5-pro был первым."""
+    prioritized = []
+    if "gemini-2.5-pro" in models:
+        prioritized.append("gemini-2.5-pro")
+    for model in models:
+        if model != "gemini-2.5-pro":
+            prioritized.append(model)
+    return prioritized
+
+
 def _send_gemini_request(
     stored_history: List[Dict[str, Any]],
     user_message: Dict[str, Any],
@@ -475,10 +506,15 @@ def _send_gemini_request(
         log.warning("No Gemini models or API keys available")
         return None
 
+    # Приоритизируем gemini-2.5-pro - он всегда первый
+    models_to_try = _prioritize_models(models_to_try)
+    log.info(f"Models to try (prioritized): {models_to_try}")
+
     for model_offset in range(len(models_to_try)):
         model_idx = (current_model_idx + model_offset) % len(models_to_try)
         model_name = models_to_try[model_idx]
         
+        model_quality_response = False
         for key_attempt in range(len(API_KEYS)):
             key_idx = (current_key_idx + key_attempt) % len(API_KEYS)
             try:
@@ -500,9 +536,20 @@ def _send_gemini_request(
                 reply_text = _extract_text_from_parts(parts)
                 log.info(f"EXTRACTED TEXT: '{reply_text}'")
 
+                # Проверяем качество ответа - если плохой, пробуем следующий ключ для этой модели
+                if not _is_quality_response(reply_text):
+                    log.warning(
+                        "Model %s (key %s) returned low-quality response: '%s'. Trying next key...",
+                        model_name,
+                        key_idx + 1,
+                        reply_text[:50] if reply_text else "(empty)",
+                    )
+                    continue
+
+                # Хороший ответ получен
                 fn_call = _extract_function_call(parts)
-                
                 current_key_idx, current_model_idx = key_idx, model_idx
+                model_quality_response = True
                 
                 return {
                     "parts": parts,
@@ -524,10 +571,17 @@ def _send_gemini_request(
                     continue
                 
                 if _is_rate_limit_error(exc):
-                    log.info("Rate limit on key %s, model %s. Trying next...", key_idx + 1, model_name)
+                    log.info("Rate limit on key %s, model %s. Trying next key...", key_idx + 1, model_name)
                     continue
                 
                 log.warning("Request failed: key %s, model %s: %s", key_idx + 1, model_name, exc)
+        
+        # Если ни один ключ не дал качественный ответ для этой модели, переходим к следующей модели
+        if not model_quality_response:
+            log.warning(
+                "Model %s did not produce quality response with any key. Trying next model...",
+                model_name,
+            )
     
     return None
 
@@ -975,7 +1029,10 @@ def check_available_models() -> List[str]:
     log.info("Checking available Gemini models...")
     working_models: List[str] = []
     
-    for model_name in GEMINI_MODELS:
+    # Приоритизируем gemini-2.5-pro при проверке
+    models_to_check = _prioritize_models(GEMINI_MODELS)
+    
+    for model_name in models_to_check:
         model_found = False
         for key_idx in range(len(API_KEYS)):
             if model_found:
@@ -998,11 +1055,12 @@ def check_available_models() -> List[str]:
                 continue
     
     if working_models:
-        available_models = working_models
+        # Убеждаемся, что gemini-2.5-pro всегда первый в списке
+        available_models = _prioritize_models(working_models)
         last_model_check_ts = current_time
-        log.info(f"Available Gemini models: {working_models}")
+        log.info(f"Available Gemini models (prioritized): {available_models}")
     else:
-        available_models = GEMINI_MODELS.copy()
-        log.warning("Could not verify models, using all configured models")
+        available_models = _prioritize_models(GEMINI_MODELS.copy())
+        log.warning("Could not verify models, using all configured models (prioritized)")
     
     return available_models
