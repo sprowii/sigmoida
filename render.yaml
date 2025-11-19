@@ -1,14 +1,28 @@
 services:
-  - type: worker
+  - type: web
     name: telegram-gemini-bot
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python сигмоида.py
+    startCommand: python -m app.main
     envVars:
       - key: TG_TOKEN
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: FLASK_SECRET_KEY
+        sync: false
+      - key: DOWNLOAD_KEY
         sync: false
       - key: GEMINI_API_KEY_1
         sync: false
       - key: GEMINI_API_KEY_2
+        sync: false
+      - key: WEBAPP_BASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: POLLINATIONS_API_KEY
         sync: false
 

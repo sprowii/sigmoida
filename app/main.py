@@ -17,6 +17,7 @@ from app.bot.jobs import autopost_job, check_models_job
 from app.logging_config import log
 from app.storage.redis_store import load_data
 from app.web.server import flask_app
+from app.web.webhook import get_webhook_url, setup_webhook
 
 
 def _ensure_env() -> Tuple[str, str]:
@@ -47,10 +48,13 @@ def build_application(token: str, bot_username: str):
         "help": handlers.help_cmd,
         "privacy": handlers.privacy_cmd,
         "reset": handlers.reset,
+        "tr": handlers.translate_cmd,
+        "sum": handlers.summarize_cmd,
         "draw": handlers.draw_image_cmd,
         "game": handlers.game_cmd,
         "login": handlers.login_cmd,
         "settings": handlers.settings_cmd,
+        "stats": handlers.stats_cmd,
         "delete_data": handlers.delete_data,
         "autopost": handlers.autopost_switch,
         "set_interval": handlers.set_interval,
@@ -82,13 +86,41 @@ def main():
     bot_info = _fetch_bot_info(token)
     app = build_application(token, bot_info["username"])
 
+    # Запускаем Flask в отдельном потоке
     threading.Thread(
         target=lambda: flask_app.run(host=config.FLASK_HOST, port=config.FLASK_PORT),
         daemon=True,
     ).start()
     log.info("Flask app started")
-    log.info("Bot started рџљЂ")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+    # Проверяем, нужен ли webhook (для Render)
+    webhook_url = get_webhook_url()
+    
+    if webhook_url:
+        log.info(f"Using webhook mode: {webhook_url}")
+        # Настраиваем webhook асинхронно
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        webhook_ok = loop.run_until_complete(setup_webhook(app, webhook_url, config.FLASK_PORT))
+        
+        if webhook_ok:
+            log.info("Bot started with webhook 🚀")
+            # Запускаем бота с webhook
+            app.run_webhook(
+                listen=config.FLASK_HOST,
+                port=config.FLASK_PORT,
+                url_path="/telegram-webhook",
+                webhook_url=f"{webhook_url}/telegram-webhook",
+                allowed_updates=Update.ALL_TYPES,
+            )
+        else:
+            log.warning("Webhook setup failed, falling back to polling")
+            log.info("Bot started with polling 🚀")
+            app.run_polling(allowed_updates=Update.ALL_TYPES)
+    else:
+        log.info("Bot started with polling 🚀")
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,11 @@ from app.state import ChatConfig, configs, history
 from app.storage.redis_store import create_login_code, persist_chat_data, record_user_profile, redis_client, user_profiles
 from app.utils.text import answer_size_prompt, split_long_message, strip_html_tags
 from app.game.generator import GeneratedGame, generate_game
+from app.middleware.rate_limit import check_rate_limit, get_user_stats
+from app.middleware.cache import get_cached_response, cache_response, get_cache_stats
+from app.features.translator import translate_text, detect_language
+from app.features.summarizer import summarize_text, summarize_url
+
 MAX_IMAGE_BYTES = config.MAX_IMAGE_BYTES
 async def ensure_user_profile(update: Update):
     chat = update.effective_chat
@@ -40,7 +45,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_profile(update)
     await update.message.reply_text(
         "👋 Я Сигмоид бот. /help – справка\n\n"
-        "⚠️ <b>Важно:</b> Ваши сообщения и медиафайлы обрабатываются через Google Gemini API. /privacy",
+        "⚠️ <b>Важно:</b> Ваши сообщения обрабатываются через AI (Gemini/OpenRouter/Pollinations).\n\n"
+        "⚠️ <b>Disclaimer:</b> Весь контент генерируется AI. Разработчик не несет ответственности за сгенерированный контент.\n\n"
+        "/privacy – политика конфиденциальности",
         parse_mode=ParseMode.HTML,
     )
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -54,20 +61,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         provider_options.append("pollinations")
     provider_hint = ", ".join(provider_options + ["auto"])
     await update.message.reply_text(
-        "<b>Команды:</b>\n"
-        "/settings – показать текущие настройки\n"
-        "/autopost on|off – вкл/выкл автопосты (админ)\n"
-        "/set_interval &lt;сек&gt; – интервал автопоста (админ)\n"
-        "/set_minmsgs &lt;n&gt; – минимум сообщений для автопоста (админ)\n"
-        "/set_msgsize &lt;s|m|l&gt; – размер ответа (админ)\n"
-        "/draw &lt;описание&gt; – нарисовать изображение\n"
-        f"/set_draw_model &lt;название&gt; – выбрать модель Pollinations ({html.escape(poll_models)})\n"
-        f"/set_pollinations_text_model &lt;название&gt; – выбрать текстовую модель Pollinations ({html.escape(poll_text_models)})\n"
-        "/set_or_model &lt;название&gt; – выбрать модель OpenRouter\n"
-        f"/set_provider &lt;gemini|openrouter|pollinations|auto&gt; – выбрать провайдера ответа ({provider_hint})\n"
-        "/game &lt;идея&gt; – сгенерировать игру на Phaser через ИИ\n"
-        "/login – получить код для входа на сайт (отправь /login боту)\n"
-        "/reset – очистить историю диалога\n"
+        "<b>Основные:</b>\n"
+        "/tr [язык] текст – перевести 🌍\n"
+        "/sum текст/url – краткое содержание 📝\n"
+        "/draw описание – нарисовать 🎨\n"
+        "/game идея – сгенерировать игру 🎮\n"
+        "/stats – статистика 📊\n\n"
+        "<b>Настройки:</b>\n"
+        "/settings – текущие настройки\n"
+        f"/set_provider &lt;{provider_hint}&gt; – выбрать LLM\n"
+        "/set_or_model – модель OpenRouter\n"
+        "/set_msgsize &lt;s|m|l&gt; – размер ответа\n\n"
+        "<b>Админ:</b>\n"
+        "/autopost on|off – автопосты\n"
+        "/set_interval – интервал\n"
+        "/set_minmsgs – мин. сообщений\n\n"
+        "/reset – очистить историю\n"
         "/privacy – политика конфиденциальности",
         parse_mode=ParseMode.HTML,
     )
@@ -402,10 +411,30 @@ async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     data_updated = False
     cfg = get_cfg(chat_id)
     provider_override = cfg.llm_provider or None
+    
+    # Проверяем кэш для текстовых запросов
+    cached_result = None
+    if len(prompt_parts) == 1 and isinstance(prompt_parts[0], str):
+        cached_result = get_cached_response(chat_id, prompt_parts[0])
+    
+    if cached_result:
+        reply, model_used = cached_result
+        function_call = None
+        log.info(f"Using cached response for chat {chat_id}")
+    else:
+        try:
+            reply, model_used, function_call = await asyncio.get_running_loop().run_in_executor(
+                None, llm_request, chat_id, prompt_parts, provider_override
+            )
+            # Кэшируем ответ
+            if reply and len(prompt_parts) == 1 and isinstance(prompt_parts[0], str):
+                cache_response(chat_id, prompt_parts[0], reply, model_used)
+        except Exception as exc:
+            log.exception(exc)
+            await update.message.reply_text("⚠️ Ошибка модели.")
+            return
+    
     try:
-        reply, model_used, function_call = await asyncio.get_running_loop().run_in_executor(
-            None, llm_request, chat_id, prompt_parts, provider_override
-        )
         if function_call and function_call.name == "generate_image":
             await generate_and_send_image(update, context, function_call.args.get("prompt", ""))
             data_updated = True
@@ -434,6 +463,14 @@ async def send_bot_response(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
+    
+    # Rate limiting
+    user_id = update.effective_user.id
+    allowed, message = check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text(message)
+        return
+    
     chat_id = update.effective_chat.id
     text = update.message.text or update.message.caption or ""
     record_user_profile(chat_id, update.effective_user)
@@ -529,6 +566,134 @@ async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Код действителен 10 минут.",
         parse_mode=ParseMode.HTML,
     )
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статистику использования бота."""
+    await ensure_user_profile(update)
+    
+    user_id = update.effective_user.id
+    user_stats = get_user_stats(user_id)
+    cache_stats = get_cache_stats()
+    
+    stats_text = (
+        "📊 <b>Статистика</b>\n\n"
+        f"<b>Твои запросы:</b>\n"
+        f"• За последний час: {user_stats['requests']}\n"
+        f"• Последний запрос: {user_stats['time_window']} сек назад\n\n"
+        f"<b>Кэш ответов:</b>\n"
+        f"• Размер: {cache_stats['size']}/{cache_stats['max_size']}\n"
+        f"• TTL: {cache_stats['ttl_seconds']} сек\n\n"
+        f"<b>Лимиты:</b>\n"
+        f"• 10 запросов в минуту\n"
+        f"• 100 запросов в час"
+    )
+    
+    await update.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
+
+
+async def summarize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создает краткое содержание текста или статьи."""
+    await ensure_user_profile(update)
+    
+    text_to_summarize = None
+    is_url = False
+    
+    # Проверяем аргументы
+    if context.args:
+        arg = " ".join(context.args)
+        # Это URL?
+        if arg.startswith(('http://', 'https://')):
+            text_to_summarize = arg
+            is_url = True
+        else:
+            text_to_summarize = arg
+    
+    # Или это ответ на сообщение?
+    if not text_to_summarize and update.message.reply_to_message:
+        text_to_summarize = update.message.reply_to_message.text
+        # Проверяем, может это URL в сообщении
+        if text_to_summarize and text_to_summarize.startswith(('http://', 'https://')):
+            is_url = True
+    
+    if not text_to_summarize:
+        await update.message.reply_text(
+            "Использование:\n"
+            "<code>/sum текст для саммаризации</code>\n"
+            "<code>/sum https://example.com/article</code>\n"
+            "Или ответь командой /sum на сообщение\n\n"
+            "Минимум 200 символов для текста",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    await update.message.reply_text("⏳ Анализирую...")
+    
+    chat_id = update.effective_chat.id
+    
+    if is_url:
+        summary = summarize_url(chat_id, text_to_summarize)
+    else:
+        summary = summarize_text(chat_id, text_to_summarize)
+    
+    if summary:
+        await update.message.reply_text(
+            f"📝 <b>Краткое содержание:</b>\n\n{summary}",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("❌ Ошибка саммаризации")
+
+
+async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переводит текст."""
+    await ensure_user_profile(update)
+    
+    # Определяем целевой язык и текст
+    target_lang = "ru"
+    text_to_translate = None
+    
+    if context.args:
+        # Проверяем, первый аргумент - язык?
+        first_arg = context.args[0].lower()
+        if first_arg in ["ru", "en", "es", "fr", "de", "it", "ja", "ko", "zh"]:
+            target_lang = first_arg
+            text_to_translate = " ".join(context.args[1:])
+        else:
+            text_to_translate = " ".join(context.args)
+    
+    # Или это ответ на сообщение?
+    if not text_to_translate and update.message.reply_to_message:
+        text_to_translate = update.message.reply_to_message.text
+    
+    if not text_to_translate:
+        await update.message.reply_text(
+            "Использование:\n"
+            "<code>/tr текст</code> - перевести на русский\n"
+            "<code>/tr en текст</code> - перевести на английский\n"
+            "Или ответь командой /tr на сообщение\n\n"
+            "Языки: ru, en, es, fr, de, it, ja, ko, zh",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Автоопределение: если текст на русском, переводим на английский
+    detected = detect_language(text_to_translate)
+    if detected == "ru" and target_lang == "ru":
+        target_lang = "en"
+    
+    await update.message.reply_text("⏳ Перевожу...")
+    
+    chat_id = update.effective_chat.id
+    translation = translate_text(chat_id, text_to_translate, target_lang)
+    
+    if translation:
+        await update.message.reply_text(
+            f"🌍 <b>Перевод ({target_lang}):</b>\n{translation}",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("❌ Ошибка перевода")
+
+
 async def set_openrouter_model_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Устанавливает или показывает предпочитаемую модель OpenRouter.
