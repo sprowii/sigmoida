@@ -14,6 +14,7 @@ class ChatConfig:
     pollinations_model: str = ""
     llm_provider: str = ""
     pollinations_text_model: str = ""
+    openrouter_model: str = ""  # Добавлено для хранения выбранной модели OpenRouter
 
 
 configs: Dict[int, ChatConfig] = {}

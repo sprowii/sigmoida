@@ -911,6 +911,10 @@ def _generate_image_via_pollinations(
     prompt: str, 
     model_override: Optional[str] = None
 ) -> Tuple[Optional[bytes], str]:
+    # Ограничение длины промпта для предотвращения DoS
+    if len(prompt) > 2000:
+        prompt = prompt[:2000]
+    
     seed_value = POLLINATIONS_SEED or str(random.randint(0, 1_000_000_000))
     encoded_prompt = urllib.parse.quote_plus(prompt)
     model_name = model_override or POLLINATIONS_MODEL

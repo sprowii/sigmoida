@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import re
 import secrets
 import time
 from dataclasses import asdict
@@ -387,21 +388,27 @@ def create_login_code(
 
 
 def consume_login_code(code: str) -> Optional[Dict[str, Any]]:
-    key = f"{LOGIN_CODE_PREFIX}{code.strip().upper()}"
+    # Валидация кода для предотвращения инъекций
+    sanitized_code = code.strip().upper()
+    if not re.match(r'^[A-Z0-9]{6,}$', sanitized_code):
+        log.warning("Попытка использовать некорректный код входа: %s", code)
+        return None
+    
+    key = f"{LOGIN_CODE_PREFIX}{sanitized_code}"
     try:
         with redis_client.pipeline() as pipe:
             pipe.get(key)
             pipe.delete(key)
             result, _ = pipe.execute()
     except Exception as exc:
-        log.error("Не удалось прочитать код входа %s: %s", code, exc, exc_info=True)
+        log.error("Не удалось прочитать код входа %s: %s", sanitized_code, exc, exc_info=True)
         return None
     if not result:
         return None
     try:
         decoded: Dict[str, Any] = json.loads(result)
     except json.JSONDecodeError:
-        log.warning("Некорректный JSON в коде входа %s", code)
+        log.warning("Некорректный JSON в коде входа %s", sanitized_code)
         return None
     return decoded
 

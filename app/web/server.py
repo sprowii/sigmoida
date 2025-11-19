@@ -1,5 +1,6 @@
 ﻿# Copyright (c) 2025 sprouee
 import json
+import re
 import secrets
 from datetime import timedelta
 from pathlib import Path
@@ -33,6 +34,11 @@ flask_app = Flask(__name__, static_folder=str(WEBAPP_DIR), static_url_path="/web
 flask_app.config["SECRET_KEY"] = config.FLASK_SECRET_KEY
 flask_app.config["SESSION_COOKIE_NAME"] = config.SESSION_COOKIE_NAME
 flask_app.permanent_session_lifetime = timedelta(days=14)
+
+# Защита от CSRF и других атак
+flask_app.config["SESSION_COOKIE_SECURE"] = True  # Только HTTPS
+flask_app.config["SESSION_COOKIE_HTTPONLY"] = True  # Защита от XSS
+flask_app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Защита от CSRF
 
 
 def _make_share_url(game_id: Optional[str]) -> Optional[str]:
@@ -69,7 +75,8 @@ def _is_admin_id(raw_id: Any) -> bool:
     if raw_id is None or not config.ADMIN_ID:
         return False
     try:
-        return str(raw_id) == str(config.ADMIN_ID)
+        # Используем constant-time comparison для защиты от timing attacks
+        return secrets.compare_digest(str(raw_id), str(config.ADMIN_ID))
     except Exception:
         return False
 
@@ -228,7 +235,10 @@ def home():
 @flask_app.route("/admin/download/history")
 def download_history():
     provided_key = request.args.get("key")
-    if not config.DOWNLOAD_KEY or provided_key != config.DOWNLOAD_KEY:
+    # Используем constant-time comparison для защиты от timing attacks
+    if not config.DOWNLOAD_KEY:
+        abort(403)
+    if not secrets.compare_digest(str(provided_key or ""), str(config.DOWNLOAD_KEY)):
         abort(403)
     try:
         history_snapshot: Dict[str, Any] = {}
@@ -273,6 +283,9 @@ def hub_entrypoint():
 
 @flask_app.route("/api/games/<string:game_id>")
 def fetch_game(game_id: str):
+    # Валидация game_id для предотвращения path traversal
+    if not re.match(r'^[a-f0-9]{32}$', game_id):
+        abort(400, description="Некорректный формат game_id")
     payload = load_game_payload(game_id)
     if not payload:
         abort(404)
@@ -396,6 +409,9 @@ def create_game_api():
     idea = (data.get("idea") or "").strip()
     if len(idea) < 4:
         _abort_json(400, "Опиши идею игры чуть подробнее.", "invalid_request")
+    # Ограничение длины для предотвращения DoS
+    if len(idea) > 5000:
+        _abort_json(400, "Описание игры слишком длинное (макс. 5000 символов).", "invalid_request")
     provider_raw = data.get("provider")
     provider_choice: Optional[str] = None
     if isinstance(provider_raw, str):
@@ -432,6 +448,9 @@ def create_game_api():
 
 @flask_app.route("/api/games/<string:game_id>/tweak", methods=["POST"])
 def tweak_game_api(game_id: str):
+    # Валидация game_id для предотвращения path traversal
+    if not re.match(r'^[a-f0-9]{32}$', game_id):
+        abort(400, description="Некорректный формат game_id")
     payload = load_game_payload(game_id)
     if not payload:
         abort(404)
@@ -441,6 +460,9 @@ def tweak_game_api(game_id: str):
     instructions = (data.get("instructions") or "").strip()
     if len(instructions) < 4:
         _abort_json(400, "Опиши, что нужно изменить хотя бы в нескольких словах.", "invalid_request")
+    # Ограничение длины для предотвращения DoS
+    if len(instructions) > 5000:
+        _abort_json(400, "Описание изменений слишком длинное (макс. 5000 символов).", "invalid_request")
     provider_raw = data.get("provider")
     provider_choice: Optional[str] = None
     if isinstance(provider_raw, str):

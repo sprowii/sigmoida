@@ -3,6 +3,7 @@ import asyncio
 import html
 import io
 from functools import partial
+import secrets
 from typing import List, Optional
 from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ChatAction, ChatType, MessageEntityType, ParseMode
@@ -30,7 +31,8 @@ def get_cfg(chat_id: int) -> ChatConfig:
         configs[chat_id] = ChatConfig()
     return configs[chat_id]
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if str(update.effective_user.id) == config.ADMIN_ID:
+    # Используем constant-time comparison для защиты от timing attacks
+    if config.ADMIN_ID and secrets.compare_digest(str(update.effective_user.id), str(config.ADMIN_ID)):
         return True
     await update.message.reply_text("Эта команда доступна только администратору.")
     return False
@@ -86,7 +88,8 @@ async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or update.effective_user.first_name
     chat_type = update.effective_chat.type
-    is_bot_admin = str(user_id) == config.ADMIN_ID
+    # Используем constant-time comparison для защиты от timing attacks
+    is_bot_admin = config.ADMIN_ID and secrets.compare_digest(str(user_id), str(config.ADMIN_ID))
     can_delete = False
     if chat_type == ChatType.PRIVATE:
         can_delete = True

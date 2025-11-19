@@ -19,6 +19,9 @@ def _resolve_redis_url(raw_url: str) -> str:
 REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
     raise RuntimeError("Переменная окружения REDIS_URL должна быть установлена")
+# Валидация Redis URL для предотвращения инъекций
+if not REDIS_URL.startswith(("redis://", "rediss://")):
+    raise RuntimeError("REDIS_URL должен начинаться с redis:// или rediss://")
 REDIS_URL = _resolve_redis_url(REDIS_URL)
 
 TG_TOKEN = os.getenv("TG_TOKEN")

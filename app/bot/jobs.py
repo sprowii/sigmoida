@@ -25,7 +25,9 @@ async def autopost_job(context: CallbackContext):
             and time.time() - cfg.last_post_ts > cfg.interval
         ):
             continue
-        prompt = f"Сделай краткий дайджест последних {cfg.new_msg_counter} сообщений чата. Выдели основные темы."
+        # Ограничение для предотвращения DoS через большое количество сообщений
+        msg_count = min(cfg.new_msg_counter, 1000)
+        prompt = f"Сделай краткий дайджест последних {msg_count} сообщений чата. Выдели основные темы."
         log.info(f"Autopost in chat {chat_id}")
         try:
             summary, model_used, _ = await asyncio.get_running_loop().run_in_executor(

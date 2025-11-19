@@ -400,6 +400,27 @@ def _sanitize_js_error(raw_error: str) -> str:
 def _validate_js_code(code: str) -> Optional[str]:
     if not code or not code.strip():
         return "Код игры пустой."
+    
+    # Проверка на опасные паттерны перед выполнением
+    dangerous_patterns = [
+        r'eval\s*\(',
+        r'Function\s*\(',
+        r'new\s+Function',
+        r'importScripts\s*\(',
+        r'Worker\s*\(',
+        r'SharedWorker\s*\(',
+        r'<script',
+        r'document\.',
+        r'window\.',
+        r'localStorage',
+        r'sessionStorage',
+        r'indexedDB',
+    ]
+    
+    for pattern in dangerous_patterns:
+        if re.search(pattern, code, re.IGNORECASE):
+            return f"Код содержит запрещенную конструкцию: {pattern}"
+    
     if not _is_node_available():
         return None
     tmp_path = None
