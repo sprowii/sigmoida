@@ -86,6 +86,9 @@ def main():
     token, _ = _ensure_env()
     bot_info = _fetch_bot_info(token)
     app = build_application(token, bot_info["username"])
+    
+    from app.web.server import set_application
+    set_application(app)
 
     # Запускаем Flask в отдельном потоке
     threading.Thread(
