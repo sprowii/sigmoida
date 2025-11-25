@@ -3,6 +3,7 @@ import threading
 from typing import Dict, Tuple
 
 import requests
+import time
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -105,15 +106,10 @@ def main():
         webhook_ok = loop.run_until_complete(setup_webhook(app, webhook_url, config.FLASK_PORT))
         
         if webhook_ok:
-            log.info("Bot started with webhook 🚀")
-            # Запускаем бота с webhook
-            app.run_webhook(
-                listen=config.FLASK_HOST,
-                port=config.FLASK_PORT,
-                url_path="/telegram-webhook",
-                webhook_url=f"{webhook_url}/telegram-webhook",
-                allowed_updates=Update.ALL_TYPES,
-            )
+            log.info("Bot started with webhook (Flask handling) 🚀")
+            # Flask handles /telegram-webhook, keep process alive
+            while True:
+                time.sleep(60)
         else:
             log.warning("Webhook setup failed, falling back to polling")
             log.info("Bot started with polling 🚀")
@@ -125,5 +121,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

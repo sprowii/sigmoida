@@ -27,6 +27,9 @@ from app.storage.redis_store import (
     redis_client,
 )
 
+from telegram import Update
+from telegram.ext import Application
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 WEBAPP_DIR = BASE_DIR / "webapp"
 
@@ -39,6 +42,15 @@ flask_app.permanent_session_lifetime = timedelta(days=14)
 flask_app.config["SESSION_COOKIE_SECURE"] = True  # Только HTTPS
 flask_app.config["SESSION_COOKIE_HTTPONLY"] = True  # Защита от XSS
 flask_app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Защита от CSRF
+
+
+application: Optional[Application] = None
+
+
+def set_application(ptb_app: Application) -> None:
+    """Set the PTB application instance for webhook handling."""
+    global application
+    application = ptb_app
 
 
 def _make_share_url(game_id: Optional[str]) -> Optional[str]:
@@ -496,3 +508,15 @@ def tweak_game_api(game_id: str):
         _abort_json(500, "Ошибка обновления игры. Попробуйте позже.", "server_error")
 
     return jsonify({"game": _serialize_generated(generated)}), 201
+
+
+@flask_app.route("/telegram-webhook", methods=["POST"])
+def telegram_webhook():
+    """Handle Telegram webhook updates via Flask."""
+    if application is None:
+        return Response("Application not ready", status=503)
+    json_string = request.get_data().decode("utf-8")
+    update = Update.de_json(json.loads(json_string), application.bot)
+    if update:
+        application.process_update(update)
+    return Response("OK", status=200)
