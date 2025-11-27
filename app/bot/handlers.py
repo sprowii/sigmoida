@@ -565,10 +565,24 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         record_user_profile(chat_id, update.effective_user)
         
+        # Telegram Bot API лимит на скачивание — 20MB
+        # Z.AI поддерживает до 200MB, но мы ограничены Telegram
+        TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024
+        
         # Проверяем размер видео
         if video.file_size and video.file_size > MAX_VIDEO_BYTES:
             await update.message.reply_text(
-                f"⚠️ Видео слишком большое. Максимум {MAX_VIDEO_BYTES // (1024*1024)} МБ."
+                f"⚠️ Видео слишком большое. Z.AI поддерживает до {MAX_VIDEO_BYTES // (1024*1024)} МБ."
+            )
+            return
+        
+        if video.file_size and video.file_size > TELEGRAM_FILE_LIMIT:
+            await update.message.reply_text(
+                f"⚠️ Видео слишком большое для скачивания через Telegram (лимит 20 МБ).\n\n"
+                f"Попробуйте:\n"
+                f"• Сжать видео перед отправкой\n"
+                f"• Отправить более короткий клип\n"
+                f"• Использовать видео-кружочек (до 1 мин)"
             )
             return
         
@@ -579,12 +593,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             video_buffer = io.BytesIO()
             await file.download_to_memory(out=video_buffer)
             video_bytes = video_buffer.getvalue()
-            
-            if len(video_bytes) > MAX_VIDEO_BYTES:
-                await update.message.reply_text(
-                    f"⚠️ Видео слишком большое. Максимум {MAX_VIDEO_BYTES // (1024*1024)} МБ."
-                )
-                return
             
             # Определяем MIME тип
             mime_type = getattr(video, "mime_type", None) or "video/mp4"
@@ -605,8 +613,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_bot_response(update, context, chat_id, prompt_parts)
             
         except Exception as exc:
-            log.error(f"Video processing error: {exc}", exc_info=True)
-            await update.message.reply_text("⚠️ Не удалось обработать видео. Попробуйте позже.")
+            error_msg = str(exc).lower()
+            if "too big" in error_msg or "file is too big" in error_msg:
+                await update.message.reply_text(
+                    "⚠️ Видео слишком большое для Telegram Bot API (лимит ~20 МБ).\n\n"
+                    "Попробуйте сжать видео или отправить более короткий клип."
+                )
+            else:
+                log.error(f"Video processing error: {exc}", exc_info=True)
+                await update.message.reply_text("⚠️ Не удалось обработать видео. Попробуйте позже.")
         return
     
     # Для голосовых сообщений и видео без Z.AI
