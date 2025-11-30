@@ -7,7 +7,9 @@ import time
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
 )
@@ -16,6 +18,7 @@ from app import config
 from app.bot import handlers
 from app.bot.jobs import autopost_job, check_models_job
 from app.logging_config import log
+from app.moderation import init_moderation_controller
 from app.storage.redis_store import load_data
 from app.web.server import flask_app
 from app.web.webhook import get_webhook_url, setup_webhook
@@ -64,12 +67,63 @@ def build_application(token: str, bot_username: str):
         "set_draw_model": handlers.set_draw_model,
         "set_pollinations_text_model": handlers.set_pollinations_text_model,
         "set_or_model": handlers.set_openrouter_model_handler,
-        "set_zai_model": handlers.set_zai_model_handler,
         "set_provider": handlers.set_provider,
+        # Moderation commands (Requirements 3.1, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4)
+        "warn": handlers.warn_cmd,
+        "warns": handlers.warns_cmd,
+        "clearwarns": handlers.clearwarns_cmd,
+        "ban": handlers.ban_cmd,
+        "mute": handlers.mute_cmd,
+        "unmute": handlers.unmute_cmd,
+        "kick": handlers.kick_cmd,
+        # Content filter commands (Requirement 5)
+        "addfilter": handlers.addfilter_cmd,
+        "removefilter": handlers.removefilter_cmd,
+        "filters": handlers.filters_cmd,
+        # Moderation settings commands (Requirement 7)
+        "modsettings": handlers.mod_settings_cmd,
+        "setmodvalue": handlers.setmodvalue_cmd,
+        "setlogchannel": handlers.setlogchannel_cmd,
+        "exportsettings": handlers.exportsettings_cmd,
+        "importsettings": handlers.importsettings_cmd,
+        # Moderation log command (Requirement 8)
+        "modlog": handlers.modlog_cmd,
     }
     for command, callback in command_handlers.items():
         app.add_handler(CommandHandler(command, callback))
 
+    # Moderation handlers - должны быть первыми для проверки спама
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handlers.handle_new_chat_members))
+    
+    # Captcha callback handler (Requirement 6.1, 6.3)
+    app.add_handler(CallbackQueryHandler(handlers.handle_captcha_callback, pattern=r"^captcha:"))
+    
+    # Moderation settings callback handler (Requirement 7.1)
+    app.add_handler(CallbackQueryHandler(handlers.handle_settings_callback, pattern=r"^modsettings:"))
+    
+    # Spam check handler for group messages (runs before main handlers)
+    # Используем group=-1 чтобы обработчик запускался раньше основных
+    from telegram.ext import ApplicationHandlerStop
+    
+    async def spam_check_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Wrapper для проверки спама. Возвращает True если сообщение заблокировано."""
+        is_spam = await handlers.check_spam_moderation(update, context)
+        if is_spam:
+            # Останавливаем дальнейшую обработку
+            raise ApplicationHandlerStop()
+    
+    # Добавляем проверку спама для текстовых сообщений в группах
+    app.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.CAPTION) & 
+            (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP) & 
+            ~filters.COMMAND,
+            spam_check_wrapper
+        ),
+        group=-1  # Запускается раньше основных обработчиков
+    )
+    
+    # Main message handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_text_and_photo))
     app.add_handler(MessageHandler(filters.PHOTO, handlers.handle_text_and_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handlers.handle_media))
@@ -78,6 +132,9 @@ def build_application(token: str, bot_username: str):
         app.job_queue.run_repeating(check_models_job, 14400, 60)
         app.job_queue.run_repeating(autopost_job, 60, 60)
         log.info("JobQueue initialized")
+    
+    # Initialize ModerationController
+    init_moderation_controller(app.bot)
 
     return app
 
