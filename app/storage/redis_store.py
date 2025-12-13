@@ -112,6 +112,10 @@ def _deserialize_part(part: Any):
 
 def load_data():
     log.info("Загрузка данных из Redis...")
+    
+    # Импортируем для расшифровки
+    from app.security.data_protection import decrypt_history
+    
     try:
         loaded_history: Dict[int, List[Dict[str, Any]]] = {}
         for key in redis_client.scan_iter(match=f"{HISTORY_KEY_PREFIX}*"):
@@ -119,8 +123,15 @@ def load_data():
             raw_value = redis_client.get(key)
             if not raw_value:
                 continue
+            
+            # Расшифровываем историю если зашифрована
+            decrypted_value = decrypt_history(raw_value)
+            if decrypted_value is None:
+                log.warning(f"Не удалось расшифровать историю для чата {chat_id_part}")
+                continue
+            
             try:
-                chat_history = json.loads(raw_value)
+                chat_history = json.loads(decrypted_value)
             except json.JSONDecodeError as exc:
                 log.warning(f"Некорректный JSON истории для чата {chat_id_part}: {exc}")
                 continue
@@ -211,11 +222,12 @@ def save_chat_data(chat_id: int):
     """Сохраняет данные чата в Redis с защитой персональных данных.
     
     БЕЗОПАСНОСТЬ:
+    - История диалогов шифруется
     - Профили пользователей шифруются перед сохранением
-    - История и конфиги сохраняются как есть (не содержат PII)
+    - Конфиги не содержат PII
     """
     # Импортируем здесь чтобы избежать циклических импортов
-    from app.security.data_protection import encrypt_pii, pseudonymize_id
+    from app.security.data_protection import encrypt_pii, encrypt_history
     
     history_key = f"{HISTORY_KEY_PREFIX}{chat_id}"
     config_key = f"{CONFIG_KEY_PREFIX}{chat_id}"
@@ -224,7 +236,10 @@ def save_chat_data(chat_id: int):
         with redis_client.pipeline() as pipe:
             if chat_id in history:
                 serialized_history = [convert_history_to_dict(item) for item in history[chat_id]]
-                pipe.set(history_key, json.dumps(serialized_history, ensure_ascii=False))
+                history_json = json.dumps(serialized_history, ensure_ascii=False)
+                # Шифруем историю диалогов!
+                encrypted_history = encrypt_history(history_json)
+                pipe.set(history_key, encrypted_history)
             else:
                 pipe.delete(history_key)
 

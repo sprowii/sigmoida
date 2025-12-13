@@ -49,3 +49,4 @@ dump.rdb
 # Temporary files
 *.tmp
 temp/
+scripts/

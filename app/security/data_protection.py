@@ -148,18 +148,25 @@ def decrypt_data(encrypted: str) -> Optional[str]:
 def encrypt_pii(data: Dict[str, Any]) -> Dict[str, Any]:
     """Шифрует персональные данные в словаре.
     
-    Шифрует поля: username, first_name, last_name, full_name
-    Оставляет: id (псевдонимизированный), is_bot, updated_at
+    Шифрует поля: id, username, first_name, last_name, full_name
+    Оставляет: is_bot, updated_at
+    
+    ВАЖНО: user_id тоже шифруется, т.к. через него можно пробить человека
     """
     if not _fernet:
         return data
     
     result = data.copy()
-    pii_fields = ["username", "first_name", "last_name", "full_name", "language_code"]
+    # Теперь шифруем и ID!
+    pii_fields = ["id", "username", "first_name", "last_name", "full_name", "language_code"]
     
     for field in pii_fields:
-        if field in result and result[field]:
-            encrypted = encrypt_data(str(result[field]))
+        if field in result and result[field] is not None:
+            value = result[field]
+            # Проверяем, не зашифровано ли уже
+            if isinstance(value, str) and value.startswith("enc:"):
+                continue
+            encrypted = encrypt_data(str(value))
             if encrypted:
                 result[field] = f"enc:{encrypted}"
     
@@ -177,9 +184,62 @@ def decrypt_pii(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, str) and value.startswith("enc:"):
             decrypted = decrypt_data(value[4:])
             if decrypted:
-                result[key] = decrypted
+                # Для id конвертируем обратно в int
+                if key == "id":
+                    try:
+                        result[key] = int(decrypted)
+                    except ValueError:
+                        result[key] = decrypted
+                else:
+                    result[key] = decrypted
     
     return result
+
+
+# ============================================================================
+# ШИФРОВАНИЕ ИСТОРИИ ДИАЛОГОВ
+# ============================================================================
+
+def encrypt_history(history_data: str) -> Optional[str]:
+    """Шифрует историю диалогов (JSON строку).
+    
+    Args:
+        history_data: JSON строка с историей
+        
+    Returns:
+        Зашифрованная строка с префиксом "enc:" или исходная если шифрование отключено
+    """
+    if not _fernet:
+        return history_data
+    
+    encrypted = encrypt_data(history_data)
+    if encrypted:
+        return f"enc:{encrypted}"
+    return history_data
+
+
+def decrypt_history(encrypted_data: str) -> Optional[str]:
+    """Расшифровывает историю диалогов.
+    
+    Args:
+        encrypted_data: Зашифрованная строка (может быть с префиксом "enc:" или без)
+        
+    Returns:
+        Расшифрованная JSON строка или исходная если не зашифрована
+    """
+    if not encrypted_data:
+        return encrypted_data
+    
+    # Если не зашифровано — возвращаем как есть
+    if not encrypted_data.startswith("enc:"):
+        return encrypted_data
+    
+    if not _fernet:
+        log.warning("Попытка расшифровать данные без ключа шифрования")
+        return None
+    
+    decrypted = decrypt_data(encrypted_data[4:])
+    return decrypted
 
 
 # ============================================================================
