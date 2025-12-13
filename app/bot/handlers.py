@@ -158,16 +158,20 @@ async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del user_profiles[chat_id]
             log.info(f"Deleted user profiles for chat_id {chat_id}.")
         try:
-            redis_client.delete(
+            # Используем безопасное удаление с перезаписью
+            from app.security.data_protection import secure_delete_keys
+            keys_to_delete = [
                 f"{config.HISTORY_KEY_PREFIX}{chat_id}",
                 f"{config.CONFIG_KEY_PREFIX}{chat_id}",
                 f"{config.USER_KEY_PREFIX}{chat_id}",
-            )
-            log.info(f"Удалены ключи Redis для чата {chat_id}.")
+            ]
+            deleted = secure_delete_keys(redis_client, keys_to_delete)
+            log.info(f"Безопасно удалено {deleted} ключей Redis для чата.")
         except Exception as exc:
-            log.error(f"Не удалось удалить ключи Redis для чата {chat_id}: {exc}", exc_info=True)
+            log.error(f"Не удалось удалить ключи Redis: {exc}", exc_info=True)
         await update.message.reply_html(
-            "<b>Все данные для этого чата (история переписки и настройки) были успешно удалены.</b>\n"
+            "<b>Все данные для этого чата (история переписки и настройки) были безопасно удалены.</b>\n"
+            "Данные перезаписаны перед удалением для защиты от восстановления.\n"
             "Если вы продолжите использовать бота, начнется новая история."
         )
 async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,14 +187,17 @@ async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         configs.pop(target_id, None)
         user_profiles.pop(target_id, None)
         try:
-            redis_client.delete(
+            # Используем безопасное удаление с перезаписью
+            from app.security.data_protection import secure_delete_keys
+            keys_to_delete = [
                 f"{config.HISTORY_KEY_PREFIX}{target_id}",
                 f"{config.CONFIG_KEY_PREFIX}{target_id}",
                 f"{config.USER_KEY_PREFIX}{target_id}",
-            )
+            ]
+            secure_delete_keys(redis_client, keys_to_delete)
         except Exception as exc:
             log.error(f"Не удалось удалить данные чата {target_id} из Redis: {exc}", exc_info=True)
-        await update.message.reply_text(f"Данные для ID {target_id} удалены.")
+        await update.message.reply_text(f"Данные для ID {target_id} безопасно удалены.")
     except (ValueError, IndexError):
         await update.message.reply_text("Неверный ID.")
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -673,6 +680,40 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
+
+
+async def security_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статус безопасности (только для админа)."""
+    await ensure_user_profile(update)
+    if not await is_admin(update, context):
+        return
+    
+    from app.security.data_protection import check_security_config
+    
+    status = check_security_config()
+    
+    if status["secure"]:
+        status_emoji = "✅"
+        status_text = "Все настройки безопасности в порядке"
+    else:
+        status_emoji = "⚠️"
+        status_text = "Есть проблемы с конфигурацией"
+    
+    issues_text = ""
+    if status["issues"]:
+        issues_text = "\n\n<b>Проблемы:</b>\n" + "\n".join(f"• {issue}" for issue in status["issues"])
+    
+    text = (
+        f"{status_emoji} <b>Статус безопасности</b>\n\n"
+        f"<b>Шифрование:</b> {'✅ Включено' if status['encryption_enabled'] else '❌ Отключено'}\n"
+        f"<b>Соль хэширования:</b> {'✅ Настроена' if status['hash_salt_configured'] else '⚠️ Временная'}\n\n"
+        f"<b>Статус:</b> {status_text}"
+        f"{issues_text}\n\n"
+        f"<i>Для настройки задайте переменные окружения:\n"
+        f"DATA_HASH_SALT и DATA_ENCRYPTION_KEY</i>"
+    )
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def summarize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

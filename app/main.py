@@ -59,6 +59,7 @@ def build_application(token: str, bot_username: str):
         "login": handlers.login_cmd,
         "settings": handlers.settings_cmd,
         "stats": handlers.stats_cmd,
+        "security_status": handlers.security_status_cmd,
         "delete_data": handlers.delete_data,
         "autopost": handlers.autopost_switch,
         "set_interval": handlers.set_interval,
@@ -142,6 +143,17 @@ def build_application(token: str, bot_username: str):
 
 
 def main():
+    # Проверяем конфигурацию безопасности
+    from app.security.data_protection import check_security_config
+    security_status = check_security_config()
+    if not security_status["secure"]:
+        log.warning("⚠️ ВНИМАНИЕ: Проблемы с конфигурацией безопасности:")
+        for issue in security_status["issues"]:
+            log.warning(f"  - {issue}")
+        log.warning("Рекомендуется настроить DATA_HASH_SALT и DATA_ENCRYPTION_KEY")
+    else:
+        log.info("✅ Конфигурация безопасности в порядке")
+    
     load_data()
     token, _ = _ensure_env()
     bot_info = _fetch_bot_info(token)

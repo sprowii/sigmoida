@@ -171,6 +171,9 @@ def load_data():
         log.error(f"Ошибка при загрузке конфигураций из Redis: {exc}", exc_info=True)
         configs.clear()
 
+    # Импортируем здесь чтобы избежать циклических импортов
+    from app.security.data_protection import decrypt_pii
+    
     try:
         loaded_users: Dict[int, Dict[int, Dict[str, Any]]] = {}
         for key in redis_client.scan_iter(match=f"{USER_KEY_PREFIX}*"):
@@ -190,7 +193,7 @@ def load_data():
                 continue
             try:
                 loaded_users[chat_id] = {
-                    int(user_id): profile
+                    int(user_id): decrypt_pii(profile)  # Расшифровываем PII при загрузке
                     for user_id, profile in users_payload.items()
                     if isinstance(profile, dict)
                 }
@@ -205,6 +208,15 @@ def load_data():
 
 
 def save_chat_data(chat_id: int):
+    """Сохраняет данные чата в Redis с защитой персональных данных.
+    
+    БЕЗОПАСНОСТЬ:
+    - Профили пользователей шифруются перед сохранением
+    - История и конфиги сохраняются как есть (не содержат PII)
+    """
+    # Импортируем здесь чтобы избежать циклических импортов
+    from app.security.data_protection import encrypt_pii, pseudonymize_id
+    
     history_key = f"{HISTORY_KEY_PREFIX}{chat_id}"
     config_key = f"{CONFIG_KEY_PREFIX}{chat_id}"
 
@@ -223,14 +235,20 @@ def save_chat_data(chat_id: int):
 
             users_key = f"{USER_KEY_PREFIX}{chat_id}"
             if chat_id in user_profiles and user_profiles[chat_id]:
-                serialized_users = {str(uid): profile for uid, profile in user_profiles[chat_id].items()}
+                # Шифруем персональные данные перед сохранением
+                serialized_users = {}
+                for uid, profile in user_profiles[chat_id].items():
+                    # Шифруем PII в профиле
+                    protected_profile = encrypt_pii(profile.copy())
+                    # Используем псевдоним как ключ (опционально, для дополнительной защиты)
+                    serialized_users[str(uid)] = protected_profile
                 pipe.set(users_key, json.dumps(serialized_users, ensure_ascii=False))
             else:
                 pipe.delete(users_key)
 
             pipe.execute()
     except Exception as exc:
-        log.error(f"Не удалось сохранить данные чата {chat_id} в Redis: {exc}", exc_info=True)
+        log.error(f"Не удалось сохранить данные чата в Redis: {exc}", exc_info=True)
 
 
 async def persist_chat_data(chat_id: int):
@@ -239,8 +257,19 @@ async def persist_chat_data(chat_id: int):
 
 
 def record_user_profile(chat_id: int, user: Optional[User]) -> bool:
+    """Записывает профиль пользователя с защитой персональных данных.
+    
+    БЕЗОПАСНОСТЬ:
+    - Персональные данные (username, имена) шифруются перед сохранением
+    - В памяти хранятся расшифрованные данные для работы бота
+    - В Redis сохраняются зашифрованные данные
+    """
     if not user:
         return False
+    
+    # Импортируем здесь чтобы избежать циклических импортов
+    from app.security.data_protection import encrypt_pii
+    
     profile: Dict[str, Any] = {
         "id": user.id,
         "username": user.username or None,

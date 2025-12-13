@@ -7,6 +7,10 @@
 - modlog:{chat_id} - лог действий модерации
 
 Requirement 7.7: sensible defaults with all features disabled until explicitly enabled
+
+БЕЗОПАСНОСТЬ:
+- Все ID валидируются как целые числа перед использованием в ключах
+- Данные сериализуются через JSON (защита от injection)
 """
 import asyncio
 import json
@@ -18,6 +22,27 @@ from app.logging_config import log
 from app.moderation.models import ChatModSettings, Warn, ModAction
 
 import redis
+
+
+def _validate_id(value: int, name: str = "ID") -> int:
+    """Валидирует ID для предотвращения injection атак.
+    
+    Args:
+        value: Значение для валидации
+        name: Название параметра для сообщения об ошибке
+        
+    Returns:
+        Валидированное целое число
+        
+    Raises:
+        ValueError: Если значение не является валидным ID
+    """
+    if not isinstance(value, int):
+        raise ValueError(f"{name} должен быть целым числом, получено: {type(value)}")
+    # Telegram ID могут быть отрицательными (для групп/каналов)
+    if abs(value) > 10**15:  # Разумный лимит для Telegram ID
+        raise ValueError(f"{name} выходит за допустимые пределы: {value}")
+    return value
 
 # Используем тот же Redis клиент что и основное приложение
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
@@ -53,12 +78,13 @@ def _get_default_settings(chat_id: int) -> ChatModSettings:
 
 def save_settings(settings: ChatModSettings) -> None:
     """Сохранить настройки модерации в Redis."""
-    key = f"{MOD_SETTINGS_PREFIX}{settings.chat_id}"
+    chat_id = _validate_id(settings.chat_id, "chat_id")
+    key = f"{MOD_SETTINGS_PREFIX}{chat_id}"
     try:
         data = asdict(settings)
         redis_client.set(key, json.dumps(data, ensure_ascii=False))
     except Exception as exc:
-        log.error(f"Не удалось сохранить настройки модерации для чата {settings.chat_id}: {exc}")
+        log.error(f"Не удалось сохранить настройки модерации: {exc}")
         raise
 
 
@@ -73,6 +99,7 @@ def load_settings(chat_id: int) -> ChatModSettings:
     
     Если настройки не найдены, возвращает настройки по умолчанию.
     """
+    chat_id = _validate_id(chat_id, "chat_id")
     key = f"{MOD_SETTINGS_PREFIX}{chat_id}"
     try:
         raw_value = redis_client.get(key)
@@ -157,6 +184,8 @@ def import_settings(chat_id: int, json_str: str) -> ChatModSettings:
 
 def _warns_key(chat_id: int, user_id: int) -> str:
     """Получить ключ для предупреждений пользователя."""
+    chat_id = _validate_id(chat_id, "chat_id")
+    user_id = _validate_id(user_id, "user_id")
     return f"{WARNS_PREFIX}{chat_id}:{user_id}"
 
 
@@ -235,6 +264,7 @@ async def clear_warns_async(chat_id: int, user_id: int) -> int:
 
 def _modlog_key(chat_id: int) -> str:
     """Получить ключ для лога модерации."""
+    chat_id = _validate_id(chat_id, "chat_id")
     return f"{MODLOG_PREFIX}{chat_id}"
 
 

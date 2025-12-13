@@ -3,6 +3,11 @@
 
 Requirement 8.1: Record all moderation actions with timestamp, action type, target user, acting admin, and reason
 Requirement 8.4: Forward all moderation actions to log channel in real-time
+
+БЕЗОПАСНОСТЬ:
+- В Redis сохраняются псевдонимизированные ID (хэши)
+- В лог-канал отправляются реальные ID (для работы модераторов)
+- В application logs используются псевдонимы
 """
 import asyncio
 from datetime import datetime
@@ -15,6 +20,7 @@ from telegram.error import TelegramError
 from app.logging_config import log
 from app.moderation.models import ModAction
 from app.moderation.storage import save_mod_action_async, load_settings_async
+from app.security.data_protection import pseudonymize_id, safe_log_action
 
 
 class ModLogger:
@@ -44,10 +50,14 @@ class ModLogger:
         # Сохраняем в Redis
         try:
             await save_mod_action_async(action)
-            log.info(
-                f"ModAction logged: {action.action_type} on user {action.target_user_id} "
-                f"in chat {action.chat_id} by {'auto' if action.auto else action.admin_id}"
-            )
+            # Логируем с псевдонимизированными ID для безопасности
+            log.info(safe_log_action(
+                action.action_type,
+                action.target_user_id,
+                action.chat_id,
+                action.admin_id if not action.auto else None,
+                action.reason
+            ))
         except Exception as exc:
             log.error(f"Failed to save mod action to Redis: {exc}")
         
@@ -137,8 +147,12 @@ class ModLogger:
         elif action.admin_id:
             lines.append(f"👮 Админ: <code>{action.admin_id}</code>")
         
+        import html
+        # Экранируем причину для защиты от XSS
+        safe_reason = html.escape(action.reason) if action.reason else "Не указана"
+        
         lines.extend([
-            f"📝 Причина: {action.reason}",
+            f"📝 Причина: {safe_reason}",
             f"🕐 Время: {time_str}",
             f"💬 Чат: <code>{action.chat_id}</code>",
         ])
