@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Utilities that orchestrate AI-driven generation of sandbox games (2D/3D)."""
 
 from __future__ import annotations

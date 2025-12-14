@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Быстрый переводчик через LLM."""
 
 from typing import Optional

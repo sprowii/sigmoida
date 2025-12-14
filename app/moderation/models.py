@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Модели данных для системы модерации."""
 from dataclasses import dataclass, field
 from typing import List, Optional

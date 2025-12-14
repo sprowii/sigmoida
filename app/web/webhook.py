@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Webhook support для Telegram бота на Render."""
 
 import asyncio

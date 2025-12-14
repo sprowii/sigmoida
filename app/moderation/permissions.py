@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Модуль проверки прав администратора с кэшированием.
 
 Requirement 4.5: Non-admin users cannot use moderation commands

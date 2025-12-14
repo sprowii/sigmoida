@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 import time
 from dataclasses import dataclass
 from enum import Enum

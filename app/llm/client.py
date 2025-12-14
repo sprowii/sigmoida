@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2025 sprouee
+﻿# Copyright (c) 2025 sprowii
 import base64
 import re
 import random

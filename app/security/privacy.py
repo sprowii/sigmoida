@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2025 sprouee
+﻿# Copyright (c) 2025 sprowii
 PRIVACY_POLICY_TEXT = """
 <b>Политика Конфиденциальности для бота "Сигмоида"</b>
 

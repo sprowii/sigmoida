@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2025 sprouee
+﻿# Copyright (c) 2025 sprowii
 from dataclasses import dataclass
 from typing import Any, Dict, List
 

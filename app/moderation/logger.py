@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Логирование действий модерации.
 
 Requirement 8.1: Record all moderation actions with timestamp, action type, target user, acting admin, and reason

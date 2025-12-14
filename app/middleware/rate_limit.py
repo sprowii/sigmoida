@@ -1,4 +1,4 @@
-# Copyright (c) 2025 sprouee
+# Copyright (c) 2025 sprowii
 """Rate limiting middleware для защиты от спама."""
 
 import time
