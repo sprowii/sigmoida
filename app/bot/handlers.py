@@ -14,6 +14,7 @@ from app import config
 from app.config import OPENROUTER_MODELS
 from app.llm.client import llm_generate_image, llm_request
 from app.logging_config import log
+from app.security.data_protection import safe_log_user, pseudonymize_id, pseudonymize_chat_id
 from app.security.privacy import PRIVACY_POLICY_TEXT
 from app.state import ChatConfig, configs, history
 from app.storage.redis_store import create_login_code, persist_chat_data, record_user_profile, redis_client, user_profiles
@@ -120,43 +121,45 @@ async def delete_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Используем constant-time comparison для защиты от timing attacks
     is_bot_admin = config.ADMIN_ID and secrets.compare_digest(str(user_id), str(config.ADMIN_ID))
     can_delete = False
+    safe_user = safe_log_user(user_id, username)
+    safe_chat = pseudonymize_chat_id(chat_id)
     if chat_type == ChatType.PRIVATE:
         can_delete = True
-        log.info(f"User {username} ({user_id}) in private chat requested to delete their data.")
+        log.info(f"User {safe_user} in private chat requested to delete their data.")
     elif chat_type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         if is_bot_admin:
             can_delete = True
-            log.info(f"Bot admin {username} ({user_id}) in group chat ({chat_id}) requested to delete chat data.")
+            log.info(f"Bot admin {safe_user} in group chat ({safe_chat}) requested to delete chat data.")
         else:
             try:
                 chat_member = await context.bot.get_chat_member(chat_id, user_id)
                 if chat_member.status in [ChatMember.ADMINISTRATOR, ChatMember.CREATOR]:
                     can_delete = True
-                    log.info(f"Group admin {username} ({user_id}) in group chat ({chat_id}) requested to delete chat data.")
+                    log.info(f"Group admin {safe_user} in group chat ({safe_chat}) requested to delete chat data.")
                 else:
                     log.warning(
-                        f"User {username} ({user_id}) tried to delete data in group chat ({chat_id}) without admin rights."
+                        f"User {safe_user} tried to delete data in group chat ({safe_chat}) without admin rights."
                     )
                     await update.message.reply_html("<b>Эту команду могут использовать только администраторы группы.</b>")
                     return
             except Exception as exc:
-                log.error(f"Error checking chat member status in group {chat_id}: {exc}")
+                log.error(f"Error checking chat member status in group {safe_chat}: {exc}")
                 await update.message.reply_html("<b>Произошла ошибка при проверке ваших прав администратора.</b>")
                 return
     else:
-        log.warning(f"User {username} ({user_id}) tried to delete data in unsupported chat type: {chat_type}.")
+        log.warning(f"User {safe_user} tried to delete data in unsupported chat type: {chat_type}.")
         await update.message.reply_html("<b>Эта команда не поддерживается в данном типе чата.</b>")
         return
     if can_delete:
         if chat_id in history:
             del history[chat_id]
-            log.info(f"Deleted history for chat_id {chat_id}.")
+            log.info(f"Deleted history for chat {safe_chat}.")
         if chat_id in configs:
             del configs[chat_id]
-            log.info(f"Deleted configs for chat_id {chat_id}.")
+            log.info(f"Deleted configs for chat {safe_chat}.")
         if chat_id in user_profiles:
             del user_profiles[chat_id]
-            log.info(f"Deleted user profiles for chat_id {chat_id}.")
+            log.info(f"Deleted user profiles for chat {safe_chat}.")
         try:
             # Используем безопасное удаление с перезаписью
             from app.security.data_protection import secure_delete_keys
@@ -1051,7 +1054,7 @@ async def check_spam_moderation(update: Update, context: ContextTypes.DEFAULT_TY
         if member.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
             return False
     except TelegramError as exc:
-        log.warning(f"Не удалось проверить статус пользователя {user_id}: {exc}")
+        log.warning(f"Не удалось проверить статус пользователя {pseudonymize_id(user_id)}: {exc}")
     
     # Проверка контент-фильтра (Requirement 5.1)
     if settings.filter_words:
@@ -1062,7 +1065,7 @@ async def check_spam_moderation(update: Update, context: ContextTypes.DEFAULT_TY
             # Удаляем сообщение
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-                log.info(f"Удалено сообщение {message_id} от {user_id} по фильтру: {filter_result.matched_word}")
+                log.info(f"Удалено сообщение от {pseudonymize_id(user_id)} по фильтру")
             except TelegramError as exc:
                 log.warning(f"Не удалось удалить сообщение {message_id}: {exc}")
             
@@ -1116,7 +1119,7 @@ async def check_spam_moderation(update: Update, context: ContextTypes.DEFAULT_TY
     if result.should_delete:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            log.info(f"Удалено спам-сообщение {message_id} от {user_id} в чате {chat_id}: {result.reason}")
+            log.info(f"Удалено спам-сообщение от {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {result.reason}")
         except TelegramError as exc:
             log.warning(f"Не удалось удалить сообщение {message_id}: {exc}")
     
@@ -1140,9 +1143,9 @@ async def check_spam_moderation(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode=ParseMode.HTML
             )
             
-            log.info(f"Пользователь {user_id} замучен в чате {chat_id} на {result.mute_duration_min} мин: {result.reason}")
+            log.info(f"Пользователь {pseudonymize_id(user_id)} замучен в чате {pseudonymize_chat_id(chat_id)} на {result.mute_duration_min} мин: {result.reason}")
         except TelegramError as exc:
-            log.error(f"Не удалось замутить пользователя {user_id}: {exc}")
+            log.error(f"Не удалось замутить пользователя {pseudonymize_id(user_id)}: {exc}")
     
     elif result.action == SpamAction.WARN:
         # Предупреждаем пользователя (Requirement 2.2)
@@ -1172,7 +1175,7 @@ async def check_spam_moderation(update: Update, context: ContextTypes.DEFAULT_TY
                 # Пользователь не начал диалог с ботом
                 pass
             
-            log.info(f"Сообщение {message_id} от новичка {user_id} задержано: {result.reason}")
+            log.info(f"Сообщение от новичка {pseudonymize_id(user_id)} задержано: {result.reason}")
         except TelegramError as exc:
             log.warning(f"Не удалось задержать сообщение: {exc}")
     
@@ -1454,7 +1457,7 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await save_mod_action_async(ban_action)
         except TelegramError as exc:
             response_lines.append(f"\n⚠️ Не удалось забанить: {exc}")
-            log.error(f"Не удалось забанить пользователя {user_id}: {exc}")
+            log.error(f"Не удалось забанить пользователя {pseudonymize_id(user_id)}: {exc}")
     
     elif result.escalation == WarnEscalation.MUTE:
         # Мутим пользователя (Requirement 3.2)
@@ -1483,7 +1486,7 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await save_mod_action_async(mute_action)
         except TelegramError as exc:
             response_lines.append(f"\n⚠️ Не удалось замутить: {exc}")
-            log.error(f"Не удалось замутить пользователя {user_id}: {exc}")
+            log.error(f"Не удалось замутить пользователя {pseudonymize_id(user_id)}: {exc}")
     
     await update.message.reply_text("\n".join(response_lines), parse_mode=ParseMode.HTML)
 
@@ -1707,11 +1710,11 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        log.info(f"Пользователь {user_id} забанен в чате {chat_id} админом {admin_id}: {reason}")
+        log.info(f"Пользователь {pseudonymize_id(user_id)} забанен в чате {pseudonymize_chat_id(chat_id)} админом {pseudonymize_id(admin_id)}: {reason}")
         
     except TelegramError as exc:
         await update.message.reply_text(f"⚠️ Не удалось забанить пользователя: {exc}")
-        log.error(f"Не удалось забанить пользователя {user_id} в чате {chat_id}: {exc}")
+        log.error(f"Не удалось забанить пользователя {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {exc}")
 
 
 async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1779,11 +1782,11 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        log.info(f"Пользователь {user_id} разбанен в чате {chat_id} админом {admin_id}")
+        log.info(f"Пользователь {pseudonymize_id(user_id)} разбанен в чате {pseudonymize_chat_id(chat_id)} админом {pseudonymize_id(admin_id)}")
         
     except TelegramError as exc:
         await update.message.reply_text(f"⚠️ Не удалось разбанить пользователя: {exc}")
-        log.error(f"Не удалось разбанить пользователя {user_id} в чате {chat_id}: {exc}")
+        log.error(f"Не удалось разбанить пользователя {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {exc}")
 
 
 def _parse_duration(duration_str: str) -> Optional[int]:
@@ -1988,11 +1991,11 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        log.info(f"Пользователь {user_id} замучен в чате {chat_id} на {duration_formatted} админом {admin_id}: {reason}")
+        log.info(f"Пользователь {pseudonymize_id(user_id)} замучен в чате {pseudonymize_chat_id(chat_id)} на {duration_formatted} админом {pseudonymize_id(admin_id)}: {reason}")
         
     except TelegramError as exc:
         await update.message.reply_text(f"⚠️ Не удалось замутить пользователя: {exc}")
-        log.error(f"Не удалось замутить пользователя {user_id} в чате {chat_id}: {exc}")
+        log.error(f"Не удалось замутить пользователя {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {exc}")
 
 
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2074,11 +2077,11 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        log.info(f"Пользователь {user_id} размучен в чате {chat_id} админом {admin_id}")
+        log.info(f"Пользователь {pseudonymize_id(user_id)} размучен в чате {pseudonymize_chat_id(chat_id)} админом {pseudonymize_id(admin_id)}")
         
     except TelegramError as exc:
         await update.message.reply_text(f"⚠️ Не удалось размутить пользователя: {exc}")
-        log.error(f"Не удалось размутить пользователя {user_id} в чате {chat_id}: {exc}")
+        log.error(f"Не удалось размутить пользователя {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {exc}")
 
 
 async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2174,11 +2177,11 @@ async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        log.info(f"Пользователь {user_id} кикнут из чата {chat_id} админом {admin_id}: {reason}")
+        log.info(f"Пользователь {pseudonymize_id(user_id)} кикнут из чата {pseudonymize_chat_id(chat_id)} админом {pseudonymize_id(admin_id)}: {reason}")
         
     except TelegramError as exc:
         await update.message.reply_text(f"⚠️ Не удалось кикнуть пользователя: {exc}")
-        log.error(f"Не удалось кикнуть пользователя {user_id} из чата {chat_id}: {exc}")
+        log.error(f"Не удалось кикнуть пользователя {pseudonymize_id(user_id)} из чата {pseudonymize_chat_id(chat_id)}: {exc}")
 
 
 # ============================================================================
@@ -2229,7 +2232,7 @@ async def addfilter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Сообщения с этим словом будут автоматически удаляться.",
             parse_mode=ParseMode.HTML
         )
-        log.info(f"Слово '{word}' добавлено в фильтр чата {chat_id} админом {update.effective_user.id}")
+        log.info(f"Слово добавлено в фильтр чата {pseudonymize_chat_id(chat_id)} админом {pseudonymize_id(update.effective_user.id)}")
     else:
         await update.message.reply_text(
             f"⚠️ Слово «{html.escape(word)}» уже есть в фильтре.",

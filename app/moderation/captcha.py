@@ -11,6 +11,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.error import TelegramError
 
 from app.logging_config import log
+from app.security.data_protection import pseudonymize_id, pseudonymize_chat_id
 from app.moderation.models import Captcha, ChatModSettings
 from app.moderation.storage import redis_client
 
@@ -284,7 +285,7 @@ class CaptchaManager:
                 json.dumps(data, ensure_ascii=False)
             )
             
-            log.info(f"Captcha отправлена пользователю {user.id} в чате {chat_id}")
+            log.info(f"Captcha отправлена пользователю {pseudonymize_id(user.id)} в чате {pseudonymize_chat_id(chat_id)}")
             
         except TelegramError as exc:
             log.error(f"Не удалось отправить captcha: {exc}")
@@ -336,7 +337,7 @@ class CaptchaManager:
                 # Captcha уже решена или удалена
                 return
             
-            log.info(f"Captcha таймаут для пользователя {user_id} в чате {chat_id}")
+            log.info(f"Captcha таймаут для пользователя {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}")
             
             # Удаляем сообщение с captcha
             if captcha.message_id:
@@ -351,9 +352,9 @@ class CaptchaManager:
                     await self.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
                     # Сразу разбаниваем чтобы пользователь мог вернуться
                     await self.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
-                    log.info(f"Пользователь {user_id} кикнут из чата {chat_id} за провал captcha")
+                    log.info(f"Пользователь {pseudonymize_id(user_id)} кикнут из чата {pseudonymize_chat_id(chat_id)} за провал captcha")
                 except TelegramError as exc:
-                    log.error(f"Не удалось кикнуть пользователя {user_id}: {exc}")
+                    log.error(f"Не удалось кикнуть пользователя {pseudonymize_id(user_id)}: {exc}")
             
             elif settings.captcha_fail_action == "mute":
                 try:
@@ -365,9 +366,9 @@ class CaptchaManager:
                         permissions={"can_send_messages": False},
                         until_date=until_date
                     )
-                    log.info(f"Пользователь {user_id} замучен в чате {chat_id} за провал captcha")
+                    log.info(f"Пользователь {pseudonymize_id(user_id)} замучен в чате {pseudonymize_chat_id(chat_id)} за провал captcha")
                 except TelegramError as exc:
-                    log.error(f"Не удалось замутить пользователя {user_id}: {exc}")
+                    log.error(f"Не удалось замутить пользователя {pseudonymize_id(user_id)}: {exc}")
             
             # Удаляем captcha из Redis
             await self.remove_captcha(chat_id, user_id)
@@ -456,7 +457,7 @@ class CaptchaManager:
             # Удаляем captcha из Redis
             await self.remove_captcha(chat_id, user_id)
             
-            log.info(f"Пользователь {user_id} успешно прошёл captcha в чате {chat_id}")
+            log.info(f"Пользователь {pseudonymize_id(user_id)} успешно прошёл captcha в чате {pseudonymize_chat_id(chat_id)}")
         
         return is_correct
     

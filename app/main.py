@@ -27,8 +27,6 @@ from app.web.webhook import get_webhook_url, setup_webhook
 def _ensure_env() -> Tuple[str, str]:
     if not config.TG_TOKEN or not config.ADMIN_ID:
         raise RuntimeError("TG_TOKEN и ADMIN_ID должны быть установлены")
-    if not config.DOWNLOAD_KEY:
-        log.warning("DOWNLOAD_KEY не установлен. Скачивание истории через веб будет недоступно.")
     if not config.WEBAPP_BASE_URL:
         log.warning("WEBAPP_BASE_URL не установлен. Ссылки на игры работать не будут.")
     return config.TG_TOKEN, config.ADMIN_ID

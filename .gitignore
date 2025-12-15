@@ -49,4 +49,18 @@ dump.rdb
 # Temporary files
 *.tmp
 temp/
-scripts/
+
+# Security - никогда не коммитить!
+*.pem
+*.key
+*.crt
+secrets.json
+credentials.json
+
+# Backup files
+*.bak
+*.backup
+
+# Database dumps
+*.sql
+*.dump

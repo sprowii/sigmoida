@@ -278,41 +278,6 @@ def home():
     return send_from_directory(flask_app.static_folder, "hub.html")
 
 
-@flask_app.route("/admin/download/history")
-def download_history():
-    provided_key = request.args.get("key")
-    # Используем constant-time comparison для защиты от timing attacks
-    if not config.DOWNLOAD_KEY:
-        abort(403)
-    if not secrets.compare_digest(str(provided_key or ""), str(config.DOWNLOAD_KEY)):
-        abort(403)
-    try:
-        history_snapshot: Dict[str, Any] = {}
-        for key in redis_client.scan_iter(match=f"{config.HISTORY_KEY_PREFIX}*"):
-            chat_id = key.split(":", 1)[1]
-            raw_value = redis_client.get(key)
-            if raw_value:
-                history_snapshot[chat_id] = json.loads(raw_value)
-
-        users_snapshot: Dict[str, Any] = {}
-        for key in redis_client.scan_iter(match=f"{config.USER_KEY_PREFIX}*"):
-            chat_id = key.split(":", 1)[1]
-            raw_value = redis_client.get(key)
-            if raw_value:
-                users_snapshot[chat_id] = json.loads(raw_value)
-
-        response_payload = {
-            "history": history_snapshot,
-            "users": users_snapshot,
-        }
-        response = Response(json.dumps(response_payload, ensure_ascii=False, indent=2), mimetype="application/json")
-        response.headers["Content-Disposition"] = "attachment; filename=history.json"
-        return response
-    except Exception as exc:
-        log.error(f"Не удалось выгрузить историю из Redis: {exc}", exc_info=True)
-        abort(500)
-
-
 @flask_app.route("/webapp/sandbox")
 def sandbox_entrypoint():
     if not WEBAPP_DIR.exists():
@@ -385,8 +350,8 @@ def auth_login():
         abort(400, description="Код обязателен.")
     decoded = consume_login_code(code)
     if not decoded:
-        # Логируем неудачную попытку входа для мониторинга
-        log.warning(f"Failed login attempt from IP {client_ip} with code: {code[:2]}***")
+        # Логируем неудачную попытку входа для мониторинга (без части кода)
+        log.warning(f"Failed login attempt from IP {client_ip}")
         abort(400, description="Код недействителен или истёк.")
     session["user"] = {
         "user_id": decoded.get("user_id"),

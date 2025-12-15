@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Any
 
 from app.config import REDIS_URL
 from app.logging_config import log
+from app.security.data_protection import pseudonymize_id, pseudonymize_chat_id
 from app.moderation.models import ChatModSettings, Warn, ModAction
 
 import redis
@@ -43,6 +44,22 @@ def _validate_id(value: int, name: str = "ID") -> int:
     if abs(value) > 10**15:  # Разумный лимит для Telegram ID
         raise ValueError(f"{name} выходит за допустимые пределы: {value}")
     return value
+
+
+def _sanitize_string(value: str, max_length: int = 1000) -> str:
+    """Санитизирует строку для безопасного хранения.
+    
+    Args:
+        value: Строка для санитизации
+        max_length: Максимальная длина
+        
+    Returns:
+        Безопасная строка
+    """
+    if not isinstance(value, str):
+        return str(value)[:max_length]
+    # Удаляем null bytes и ограничиваем длину
+    return value.replace('\x00', '').strip()[:max_length]
 
 # Используем тот же Redis клиент что и основное приложение
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
@@ -111,13 +128,13 @@ def load_settings(chat_id: int) -> ChatModSettings:
         data["chat_id"] = chat_id
         return ChatModSettings(**data)
     except json.JSONDecodeError as exc:
-        log.warning(f"Некорректный JSON настроек для чата {chat_id}: {exc}")
+        log.warning(f"Некорректный JSON настроек для чата {pseudonymize_chat_id(chat_id)}: {exc}")
         return _get_default_settings(chat_id)
     except TypeError as exc:
-        log.warning(f"Некорректные данные настроек для чата {chat_id}: {exc}")
+        log.warning(f"Некорректные данные настроек для чата {pseudonymize_chat_id(chat_id)}: {exc}")
         return _get_default_settings(chat_id)
     except Exception as exc:
-        log.error(f"Ошибка загрузки настроек для чата {chat_id}: {exc}")
+        log.error(f"Ошибка загрузки настроек для чата {pseudonymize_chat_id(chat_id)}: {exc}")
         return _get_default_settings(chat_id)
 
 
@@ -133,7 +150,7 @@ def delete_settings(chat_id: int) -> bool:
     try:
         return redis_client.delete(key) > 0
     except Exception as exc:
-        log.error(f"Не удалось удалить настройки для чата {chat_id}: {exc}")
+        log.error(f"Не удалось удалить настройки для чата {pseudonymize_chat_id(chat_id)}: {exc}")
         return False
 
 
@@ -220,7 +237,7 @@ def load_warns(chat_id: int, user_id: int) -> List[Warn]:
                 log.warning(f"Некорректные данные предупреждения: {exc}")
         return warns
     except Exception as exc:
-        log.error(f"Ошибка загрузки предупреждений для {chat_id}:{user_id}: {exc}")
+        log.error(f"Ошибка загрузки предупреждений для {pseudonymize_chat_id(chat_id)}:{pseudonymize_id(user_id)}: {exc}")
         return []
 
 
@@ -326,7 +343,7 @@ def load_mod_log(
         
         return actions
     except Exception as exc:
-        log.error(f"Ошибка загрузки лога модерации для чата {chat_id}: {exc}")
+        log.error(f"Ошибка загрузки лога модерации для чата {pseudonymize_chat_id(chat_id)}: {exc}")
         return []
 
 

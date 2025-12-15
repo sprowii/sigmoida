@@ -32,7 +32,6 @@ Telegram бот с AI-возможностями: генерация текст�
 - `REDIS_URL` - URL Redis (используй `rediss://` для SSL)
 - `ADMIN_ID` - твой Telegram ID
 - `FLASK_SECRET_KEY` - случайный ключ (генерируй через `secrets.token_hex(32)`)
-- `DOWNLOAD_KEY` - ключ для скачивания истории
 - `GEMINI_API_KEY_1` - Gemini API ключ
 - `WEBAPP_BASE_URL` - URL твоего приложения на Render
 

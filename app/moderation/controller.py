@@ -9,6 +9,7 @@ from telegram.constants import ChatType
 from telegram.error import TelegramError
 
 from app.logging_config import log
+from app.security.data_protection import pseudonymize_id, pseudonymize_chat_id
 from app.moderation.models import ChatModSettings, ModAction, Warn
 from app.moderation.storage import (
     load_settings,
@@ -335,7 +336,7 @@ class ModerationController:
             
             return True
         except TelegramError as exc:
-            log.error(f"Не удалось забанить пользователя {user_id}: {exc}")
+            log.error(f"Не удалось забанить пользователя {pseudonymize_id(user_id)}: {exc}")
             return False
     
     async def mute_user(
@@ -372,7 +373,7 @@ class ModerationController:
             
             return True
         except TelegramError as exc:
-            log.error(f"Не удалось замутить пользователя {user_id}: {exc}")
+            log.error(f"Не удалось замутить пользователя {pseudonymize_id(user_id)}: {exc}")
             return False
     
     async def unmute_user(
@@ -408,7 +409,7 @@ class ModerationController:
             
             return True
         except TelegramError as exc:
-            log.error(f"Не удалось размутить пользователя {user_id}: {exc}")
+            log.error(f"Не удалось размутить пользователя {pseudonymize_id(user_id)}: {exc}")
             return False
     
     async def kick_user(
@@ -439,7 +440,7 @@ class ModerationController:
             
             return True
         except TelegramError as exc:
-            log.error(f"Не удалось кикнуть пользователя {user_id}: {exc}")
+            log.error(f"Не удалось кикнуть пользователя {pseudonymize_id(user_id)}: {exc}")
             return False
     
     # ========================================================================

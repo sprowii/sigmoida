@@ -26,7 +26,6 @@ REDIS_URL = _resolve_redis_url(REDIS_URL)
 
 TG_TOKEN = os.getenv("TG_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
-DOWNLOAD_KEY = os.getenv("DOWNLOAD_KEY")
 
 # Секретный токен для верификации Telegram webhook запросов
 # Если не задан, генерируется автоматически при каждом запуске

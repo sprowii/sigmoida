@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatType
 
 from app.logging_config import log
+from app.security.data_protection import pseudonymize_id, pseudonymize_chat_id
 from app import config
 import secrets
 
@@ -148,7 +149,7 @@ async def check_admin_permission(
         return is_admin
         
     except TelegramError as exc:
-        log.error(f"Ошибка проверки статуса админа для {user_id} в чате {chat_id}: {exc}")
+        log.error(f"Ошибка проверки статуса админа для {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {exc}")
         
         if send_error_message:
             await update.message.reply_text("⚠️ Не удалось проверить права администратора.")
@@ -191,7 +192,7 @@ async def is_user_admin(
         return is_admin
         
     except TelegramError as exc:
-        log.error(f"Ошибка проверки статуса админа для {user_id} в чате {chat_id}: {exc}")
+        log.error(f"Ошибка проверки статуса админа для {pseudonymize_id(user_id)} в чате {pseudonymize_chat_id(chat_id)}: {exc}")
         return False
 
 

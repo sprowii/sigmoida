@@ -108,6 +108,15 @@ class ContentFilter:
         if not word:
             return False
         
+        # Ограничение длины слова для предотвращения DoS
+        if len(word) > 100:
+            return False
+        
+        # Ограничение количества слов в фильтре
+        if len(self.settings.filter_words) >= 500:
+            log.warning(f"Достигнут лимит слов в фильтре для чата {self.chat_id}")
+            return False
+        
         # Проверяем, нет ли уже такого слова (case-insensitive)
         existing_lower = [w.lower() for w in self.settings.filter_words]
         if word in existing_lower:

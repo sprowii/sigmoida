@@ -26,8 +26,12 @@ WEB_MAX_REQUESTS_PER_MINUTE = 30
 WEB_MAX_REQUESTS_PER_HOUR = 300
 
 # Настройки для login (более строгие для защиты от brute-force)
-LOGIN_MAX_ATTEMPTS_PER_MINUTE = 5
-LOGIN_MAX_ATTEMPTS_PER_HOUR = 20
+LOGIN_MAX_ATTEMPTS_PER_MINUTE = 3
+LOGIN_MAX_ATTEMPTS_PER_HOUR = 10
+
+# Блокировка IP после множественных неудачных попыток
+_blocked_ips: dict[str, float] = {}
+BLOCK_DURATION_SEC = 3600  # 1 час блокировки
 
 
 def _cleanup_old_entries():
@@ -165,6 +169,17 @@ def check_login_rate_limit(ip_address: str) -> Tuple[bool, str]:
     
     now = time.time()
     
+    # Проверяем, не заблокирован ли IP
+    if ip_address in _blocked_ips:
+        block_time = _blocked_ips[ip_address]
+        if now - block_time < BLOCK_DURATION_SEC:
+            remaining = int(BLOCK_DURATION_SEC - (now - block_time)) // 60
+            log.warning(f"Blocked IP {ip_address} attempted login")
+            return False, f"IP temporarily blocked. Try again in {remaining} minutes."
+        else:
+            # Блокировка истекла
+            del _blocked_ips[ip_address]
+    
     if ip_address not in _login_rate_limits:
         _login_rate_limits[ip_address] = (now, 1)
         return True, ""
@@ -175,6 +190,11 @@ def check_login_rate_limit(ip_address: str) -> Tuple[bool, str]:
     if time_diff < 60:
         if count >= LOGIN_MAX_ATTEMPTS_PER_MINUTE:
             log.warning(f"Login rate limit exceeded for IP: {ip_address}")
+            # Блокируем IP после превышения лимита
+            if count >= LOGIN_MAX_ATTEMPTS_PER_MINUTE * 2:
+                _blocked_ips[ip_address] = now
+                log.warning(f"IP {ip_address} blocked for repeated login attempts")
+                return False, "Too many failed attempts. IP blocked for 1 hour."
             return False, "Too many login attempts. Please wait 1 minute."
         _login_rate_limits[ip_address] = (last_time, count + 1)
         return True, ""
@@ -182,7 +202,8 @@ def check_login_rate_limit(ip_address: str) -> Tuple[bool, str]:
     if time_diff < 3600:
         if count >= LOGIN_MAX_ATTEMPTS_PER_HOUR:
             log.warning(f"Hourly login rate limit exceeded for IP: {ip_address}")
-            return False, "Too many login attempts. Please wait 1 hour."
+            _blocked_ips[ip_address] = now
+            return False, "Too many login attempts. IP blocked for 1 hour."
         _login_rate_limits[ip_address] = (last_time, count + 1)
         return True, ""
     

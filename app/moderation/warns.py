@@ -13,6 +13,7 @@ from enum import Enum
 from typing import List, Optional
 
 from app.logging_config import log
+from app.security.data_protection import pseudonymize_id, pseudonymize_chat_id
 from app.moderation.models import ChatModSettings, Warn, ModAction
 from app.moderation.storage import (
     load_settings,
@@ -254,7 +255,7 @@ class WarnSystem:
             Количество удалённых предупреждений
         """
         count = storage_clear_warns(chat_id, user_id)
-        log.info(f"Cleared {count} warns for user {user_id} in chat {chat_id}")
+        log.info(f"Cleared {count} warns for user {pseudonymize_id(user_id)} in chat {pseudonymize_chat_id(chat_id)}")
         return count
     
     async def clear_warns_async(self, chat_id: int, user_id: int) -> int:
@@ -268,7 +269,7 @@ class WarnSystem:
             Количество удалённых предупреждений
         """
         count = await clear_warns_async(chat_id, user_id)
-        log.info(f"Cleared {count} warns for user {user_id} in chat {chat_id}")
+        log.info(f"Cleared {count} warns for user {pseudonymize_id(user_id)} in chat {pseudonymize_chat_id(chat_id)}")
         return count
     
     def get_warn_count(self, chat_id: int, user_id: int) -> int:

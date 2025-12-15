@@ -15,6 +15,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from app.logging_config import log
+from app.security.data_protection import pseudonymize_id, pseudonymize_chat_id
 from app.moderation.models import ChatModSettings
 from app.moderation.storage import redis_client
 
@@ -143,7 +144,7 @@ class WelcomeManager:
         try:
             member_count = await self.bot.get_chat_member_count(chat_id)
         except TelegramError as exc:
-            log.warning(f"Не удалось получить количество участников чата {chat_id}: {exc}")
+            log.warning(f"Не удалось получить количество участников чата {pseudonymize_chat_id(chat_id)}: {exc}")
         
         # Форматируем сообщение
         message_text = self.format_template(
@@ -187,11 +188,11 @@ class WelcomeManager:
                     )
                 )
             
-            log.info(f"Приветствие отправлено пользователю {user.id} в чате {chat_id}")
+            log.info(f"Приветствие отправлено пользователю {pseudonymize_id(user.id)} в чате {pseudonymize_chat_id(chat_id)}")
             return True
             
         except TelegramError as exc:
-            log.error(f"Ошибка отправки приветствия в чат {chat_id}: {exc}")
+            log.error(f"Ошибка отправки приветствия в чат {pseudonymize_chat_id(chat_id)}: {exc}")
             return False
     
     async def _auto_delete_message(
